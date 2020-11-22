@@ -35,6 +35,7 @@ setup(
     url='https://e3nn.org',
     packages=find_packages(exclude=["tests.*", "tests"]),
     install_requires=[
+        'sympy',
         'torch>=1.4.0',
         'torch_scatter',
         'torch_sparse',
