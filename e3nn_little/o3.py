@@ -135,12 +135,35 @@ def simplify(Rs):
     return out
 
 
+def dim(Rs):
+    """
+    :param Rs: list of triplet (multiplicity, representation order, [parity])
+    :return: dimention of the representation
+    """
+    Rs = convention(Rs)
+    return sum(mul * (2 * l + 1) for mul, l, _ in Rs)
+
+
 def lmax(Rs):
     """
     :param Rs: list of triplet (multiplicity, representation order, [parity])
     :return: maximum l present in the signal
     """
     return max(l for mul, l, _ in convention(Rs) if mul > 0)
+
+
+def format_Rs(Rs):
+    """
+    :param Rs: list of triplet (multiplicity, representation order, [parity])
+    :return: simplified version of the same list with the parity
+    """
+    Rs = convention(Rs)
+    d = {
+        0: "",
+        1: "e",
+        -1: "o",
+    }
+    return ",".join("{}{}{}".format("{}x".format(mul) if mul > 1 else "", l, d[p]) for mul, l, p in Rs if mul > 0)
 
 
 def spherical_harmonics(Rs, pos, normalization='none'):
