@@ -125,7 +125,6 @@ def legendre(ls, z, y=None):
 
 _legendre_code = """
 import torch
-from e3nn import rsh
 
 @torch.jit.script
 def main(z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
