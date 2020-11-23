@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import torch
 from e3nn_little import o3
-from e3nn_little.eval_code import eval_code
+from e3nn_little.util import eval_code
 
 
 def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own_weight=True):
@@ -75,6 +75,38 @@ def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
             ]
 
     return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight=False)
+
+
+class Linear(torch.nn.Module):
+    def __init__(self, Rs_in, Rs_out, normalization: str = 'component'):
+        super().__init__()
+
+        Rs_in = o3.simplify(Rs_in)
+        Rs_out = o3.simplify(Rs_out)
+
+        instr = [
+            (i_in, 0, i_out, 'uvw')
+            for i_in, (_, l_in, p_in) in enumerate(Rs_in)
+            for i_out, (_, l_out, p_out) in enumerate(Rs_out)
+            if l_in == l_out and p_in == p_out
+        ]
+        self.tp = CustomWeightedTensorProduct(Rs_in, [(1, 0, 1)], Rs_out, instr, normalization, own_weight=True)
+
+    def __repr__(self):
+        return "{name} ({Rs_in1} -> {Rs_out} using {nw} paths)".format(
+            name=self.__class__.__name__,
+            Rs_in1=o3.format_Rs(self.tp.Rs_in1),
+            Rs_out=o3.format_Rs(self.tp.Rs_out),
+            nw=self.tp.nweight,
+        )
+
+    def forward(self, features):
+        """
+        :param features: [..., dim(Rs_in)]
+        :return: [..., dim(Rs_out)]
+        """
+        ones = features.new_ones(features.shape[:-1] + (1,))
+        return self.tp(features, ones)
 
 
 class CustomWeightedTensorProduct(torch.nn.Module):

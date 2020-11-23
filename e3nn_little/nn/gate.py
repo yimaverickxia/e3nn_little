@@ -3,7 +3,8 @@ import copy
 
 import torch
 
-from e3nn_little import o3
+from e3nn_little import o3, nn
+from e3nn_little.util import normalize2mom, swish
 
 
 class Activation(torch.nn.Module):
@@ -20,6 +21,9 @@ class Activation(torch.nn.Module):
 
         n1 = sum(mul for mul, _, _ in Rs)
         n2 = sum(mul for mul, _ in acts if mul > 0)
+
+        # normalize the second moment
+        acts = [(mul, normalize2mom(act)) for mul, act in acts]
 
         for i, (mul, act) in enumerate(acts):
             if mul == -1:
@@ -96,10 +100,35 @@ class GatedBlockParity(torch.nn.Module):
         self.act_gates = Activation(Rs_gates, act_gates)
         Rs_gates = self.act_gates.Rs_out
 
-        self.mul = o3.ElementwiseTensorProduct(Rs_nonscalars, Rs_gates)
+        self.mul = nn.ElementwiseTensorProduct(Rs_nonscalars, Rs_gates)
         Rs_nonscalars = self.mul.Rs_out
 
         self.Rs_out = Rs_scalars + Rs_nonscalars
+
+    @staticmethod
+    def make_gated_block(Rs_in, mul, lmax):
+        """
+        Make a `GatedBlockParity` assuming many things
+        """
+        Rs_guess = [
+            (l, p_in * p_sh)
+            for _, l_in, p_in in o3.simplify(Rs_in)
+            for l_sh, p_sh in [(l, (-1)**l) for l in range(lmax + 1)]
+            for l in range(abs(l_in - l_sh), min(l_in + l_sh, lmax) + 1)
+        ]
+
+        scalars = [(mul, l, p) for mul, l, p in [(mul, 0, +1), (mul, 0, -1)] if (l, p) in Rs_guess]
+        act_scalars = [(mul, swish if p == 1 else torch.tanh) for mul, l, p in scalars]
+
+        nonscalars = [(mul, l, p) for l in range(1, lmax + 1) for p in [+1, -1] if (l, p) in Rs_guess]
+        if (0, +1) in Rs_guess:
+            gates = [(o3.mul_dim(nonscalars), 0, +1)]
+            act_gates = [(-1, torch.sigmoid)]
+        else:
+            gates = [(o3.mul_dim(nonscalars), 0, -1)]
+            act_gates = [(-1, torch.tanh)]
+
+        return GatedBlockParity(scalars, act_scalars, gates, act_gates, nonscalars)
 
     def __repr__(self):
         return "{name} ({Rs_scalars} + {Rs_gates} + {Rs_nonscalars} -> {Rs_out})".format(

@@ -80,6 +80,15 @@ def dim(Rs):
     return sum(mul * (2 * l + 1) for mul, l, _ in Rs)
 
 
+def mul_dim(Rs):
+    """
+    :param Rs: list of triplet (multiplicity, representation order, [parity])
+    :return: number of multiplicities of the representation
+    """
+    Rs = convention(Rs)
+    return sum(mul for mul, _, _ in Rs)
+
+
 def lmax(Rs):
     """
     :param Rs: list of triplet (multiplicity, representation order, [parity])
