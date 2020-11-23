@@ -81,16 +81,24 @@ class Linear(torch.nn.Module):
     def __init__(self, Rs_in, Rs_out, normalization: str = 'component'):
         super().__init__()
 
-        Rs_in = o3.simplify(Rs_in)
-        Rs_out = o3.simplify(Rs_out)
+        self.Rs_in = o3.simplify(Rs_in)
+        self.Rs_out = o3.simplify(Rs_out)
 
         instr = [
             (i_in, 0, i_out, 'uvw')
-            for i_in, (_, l_in, p_in) in enumerate(Rs_in)
-            for i_out, (_, l_out, p_out) in enumerate(Rs_out)
+            for i_in, (_, l_in, p_in) in enumerate(self.Rs_in)
+            for i_out, (_, l_out, p_out) in enumerate(self.Rs_out)
             if l_in == l_out and p_in == p_out
         ]
-        self.tp = CustomWeightedTensorProduct(Rs_in, [(1, 0, 1)], Rs_out, instr, normalization, own_weight=True)
+        self.tp = CustomWeightedTensorProduct(self.Rs_in, [(1, 0, 1)], self.Rs_out, instr, normalization, own_weight=True)
+
+        output_mask = torch.cat([
+            torch.ones(mul * (2 * l + 1))
+            if any(l_in == l and p_in == p for _, l_in, p_in in self.Rs_in)
+            else torch.zeros(mul * (2 * l + 1))
+            for mul, l, p in self.Rs_out
+        ])
+        self.register_buffer('output_mask', output_mask)
 
     def __repr__(self):
         return "{name} ({Rs_in1} -> {Rs_out} using {nw} paths)".format(
