@@ -166,6 +166,24 @@ def format_Rs(Rs):
     return ",".join("{}{}{}".format("{}x".format(mul) if mul > 1 else "", l, d[p]) for mul, l, p in Rs if mul > 0)
 
 
+def cut(features, *Rss, dim_=-1):
+    """
+    Cut `feaures` according to the list of Rs
+    ```
+    x = rs.randn(10, Rs1 + Rs2)
+    x1, x2 = cut(x, Rs1, Rs2)
+    ```
+    """
+    index = 0
+    outputs = []
+    for Rs in Rss:
+        n = dim(Rs)
+        yield features.narrow(dim_, index, n)
+        index += n
+    assert index == features.shape[dim_]
+    return outputs
+
+
 def spherical_harmonics(Rs, pos, normalization='none'):
     """
     spherical harmonics

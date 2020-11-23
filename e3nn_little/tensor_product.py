@@ -42,6 +42,40 @@ def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normal
     return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight)
 
 
+def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
+    Rs_in1 = o3.simplify(Rs_in1)
+    Rs_in2 = o3.simplify(Rs_in2)
+
+    assert sum(mul for mul, _, _ in Rs_in1) == sum(mul for mul, _, _ in Rs_in2)
+
+    i = 0
+    while i < len(Rs_in1):
+        mul_1, l_1, p_1 = Rs_in1[i]
+        mul_2, l_2, p_2 = Rs_in2[i]
+
+        if mul_1 < mul_2:
+            Rs_in2[i] = (mul_1, l_2, p_2)
+            Rs_in2.insert(i + 1, (mul_2 - mul_1, l_2, p_2))
+
+        if mul_2 < mul_1:
+            Rs_in1[i] = (mul_2, l_1, p_1)
+            Rs_in1.insert(i + 1, (mul_1 - mul_2, l_1, p_1))
+        i += 1
+
+    Rs_out = []
+    instr = []
+    for i, ((mul, l_1, p_1), (mul_2, l_2, p_2)) in enumerate(zip(Rs_in1, Rs_in2)):
+        assert mul == mul_2
+        for l in list(range(abs(l_1 - l_2), l_1 + l_2 + 1)):
+            i_out = len(Rs_out)
+            Rs_out.append((mul, l, p_1 * p_2))
+            instr += [
+                (i, i, i_out, 'uuu')
+            ]
+
+    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight=False)
+
+
 class CustomWeightedTensorProduct(torch.nn.Module):
     def __init__(
             self,
@@ -149,18 +183,16 @@ class CustomWeightedTensorProduct(torch.nn.Module):
 
             if mode == 'uuu':
                 assert mul_1 == mul_2 == mul_out
-                dim_w = mul_1
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zu,ijk,zuij->zuk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                dim_w = 0
+                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuij->zuk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += 1
 
             if mode == 'uvuv':
                 assert mul_1 * mul_2 == mul_out
-                dim_w = mul_1 * mul_2
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuv,ijk,zuvij->zuvk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                dim_w = 0
+                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuvk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += 1
