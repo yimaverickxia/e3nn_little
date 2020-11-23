@@ -1,8 +1,10 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
-from e3nn_little import o3
 import math
-import torch
 from typing import List, Tuple
+
+import torch
+
+from e3nn_little import o3
 from e3nn_little.eval_code import eval_code
 
 

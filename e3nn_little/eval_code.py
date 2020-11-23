@@ -3,8 +3,8 @@ Evaluate a python string as code
 """
 import importlib.machinery
 import importlib.util
-import tempfile
 import os
+import tempfile
 
 
 def eval_code(code):

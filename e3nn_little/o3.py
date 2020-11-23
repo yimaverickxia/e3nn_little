@@ -1,13 +1,15 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import math
+import os
 from functools import lru_cache
 from typing import List, Tuple
 
 import torch
 from sympy import Integer, Poly, diff, factorial, pi, sqrt, symbols
 
-from e3nn_little import constants
 from e3nn_little.eval_code import eval_code
+
+_Jd, _W3j = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
 
 
 def _z_rot_mat(angle, l):
@@ -30,7 +32,7 @@ def _z_rot_mat(angle, l):
 
 
 def irrep(l, alpha, beta, gamma):
-    J = constants.Jd[l]
+    J = _Jd[l]
     Xa = _z_rot_mat(alpha, l)
     Xb = _z_rot_mat(beta, l)
     Xc = _z_rot_mat(gamma, l)
@@ -38,18 +40,20 @@ def irrep(l, alpha, beta, gamma):
 
 
 def wigner_3j(l1, l2, l3):
+    assert abs(l2 - l3) <= l1 <= l2 + l3
+
     if l1 <= l2 <= l3:
-        return constants.wigner_3j[(l1, l2, l3)].clone()
+        return _W3j[(l1, l2, l3)].clone()
     if l1 <= l3 <= l2:
-        return constants.wigner_3j[(l1, l3, l2)].transpose(1, 2).mul((-1) ** (l1 + l2 + l3)).clone()
+        return _W3j[(l1, l3, l2)].transpose(1, 2).mul((-1) ** (l1 + l2 + l3)).clone()
     if l2 <= l1 <= l3:
-        return constants.wigner_3j[(l2, l1, l3)].transpose(0, 1).mul((-1) ** (l1 + l2 + l3)).clone()
+        return _W3j[(l2, l1, l3)].transpose(0, 1).mul((-1) ** (l1 + l2 + l3)).clone()
     if l3 <= l2 <= l1:
-        return constants.wigner_3j[(l3, l2, l1)].transpose(0, 2).mul((-1) ** (l1 + l2 + l3)).clone()
+        return _W3j[(l3, l2, l1)].transpose(0, 2).mul((-1) ** (l1 + l2 + l3)).clone()
     if l2 <= l3 <= l1:
-        return constants.wigner_3j[(l2, l3, l1)].transpose(0, 2).transpose(1, 2).clone()
+        return _W3j[(l2, l3, l1)].transpose(0, 2).transpose(1, 2).clone()
     if l3 <= l1 <= l2:
-        return constants.wigner_3j[(l3, l1, l2)].transpose(0, 2).transpose(0, 1).clone()
+        return _W3j[(l3, l1, l2)].transpose(0, 2).transpose(0, 1).clone()
 
 
 def direct_sum(*matrices):
@@ -227,7 +231,7 @@ def spherical_harmonics(Rs, pos, normalization='none'):
 
 @lru_cache()
 def _rep_zx(Rs, dtype, device):
-    return rep(Rs, 0, -math.pi / 2, 0).to(device=device)
+    return rep(Rs, 0, -math.pi / 2, 0).to(device=device, dtype=dtype)
 
 
 def _spherical_harmonics_alpha_z_y(Rs, alpha, z, y):
@@ -362,14 +366,14 @@ def mul_m_lm(Rs: List[Tuple[int, int, int]], x_m: torch.Tensor, x_lm: torch.Tens
     """
     multiply tensor [..., l * m] by [..., m]
     """
-    lmax = x_m.shape[-1] // 2
+    l_max = x_m.shape[-1] // 2
     out = []
     i = 0
     for mul, l, _ in Rs:
         d = mul * (2 * l + 1)
         x1 = x_lm[..., i: i + d]  # [..., mul * m]
         x1 = x1.reshape(x1.shape[:-1] + (mul, 2 * l + 1))  # [..., mul, m]
-        x2 = x_m[..., lmax - l: lmax + l + 1]  # [..., m]
+        x2 = x_m[..., l_max - l: l_max + l + 1]  # [..., m]
         x2 = x2.reshape(x2.shape[:-1] + (1, 2 * l + 1))  # [..., mul=1, m]
         x = x1 * x2
         x = x.reshape(x.shape[:-2] + (d,))
