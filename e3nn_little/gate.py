@@ -4,7 +4,6 @@ import copy
 import torch
 
 from e3nn_little import o3
-from e3nn_little.tensor_product import ElementwiseTensorProduct
 
 
 class Activation(torch.nn.Module):
@@ -97,7 +96,7 @@ class GatedBlockParity(torch.nn.Module):
         self.act_gates = Activation(Rs_gates, act_gates)
         Rs_gates = self.act_gates.Rs_out
 
-        self.mul = ElementwiseTensorProduct(Rs_nonscalars, Rs_gates)
+        self.mul = o3.ElementwiseTensorProduct(Rs_nonscalars, Rs_gates)
         Rs_nonscalars = self.mul.Rs_out
 
         self.Rs_out = Rs_scalars + Rs_nonscalars

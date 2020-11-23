@@ -3,7 +3,6 @@ import math
 from typing import List, Tuple
 
 import torch
-
 from e3nn_little import o3
 from e3nn_little.eval_code import eval_code
 

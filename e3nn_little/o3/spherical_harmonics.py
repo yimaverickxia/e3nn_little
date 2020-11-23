@@ -1,6 +1,5 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import math
-import os
 from functools import lru_cache
 from typing import List, Tuple
 
@@ -8,184 +7,8 @@ import torch
 from sympy import Integer, Poly, diff, factorial, pi, sqrt, symbols
 
 from e3nn_little.eval_code import eval_code
+from e3nn_little import o3
 
-_Jd, _W3j = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
-
-
-def _z_rot_mat(angle, l):
-    """
-    Create the matrix representation of a z-axis rotation by the given angle,
-    in the irrep l of dimension 2 * l + 1, in the basis of real centered
-    spherical harmonics (RC basis in rep_bases.py).
-
-    Note: this function is easy to use, but inefficient: only the entries
-    on the diagonal and anti-diagonal are non-zero, so explicitly constructing
-    this matrix is unnecessary.
-    """
-    M = torch.zeros(2 * l + 1, 2 * l + 1, dtype=torch.float64)
-    inds = torch.arange(0, 2 * l + 1, 1)
-    reversed_inds = torch.arange(2 * l, -1, -1)
-    frequencies = torch.arange(l, -l - 1, -1, dtype=torch.float64)
-    M[inds, reversed_inds] = torch.sin(frequencies * angle)
-    M[inds, inds] = torch.cos(frequencies * angle)
-    return M
-
-
-def irrep(l, alpha, beta, gamma):
-    J = _Jd[l]
-    Xa = _z_rot_mat(alpha, l)
-    Xb = _z_rot_mat(beta, l)
-    Xc = _z_rot_mat(gamma, l)
-    return Xa @ J @ Xb @ J @ Xc
-
-
-def wigner_3j(l1, l2, l3):
-    assert abs(l2 - l3) <= l1 <= l2 + l3
-
-    if l1 <= l2 <= l3:
-        return _W3j[(l1, l2, l3)].clone()
-    if l1 <= l3 <= l2:
-        return _W3j[(l1, l3, l2)].transpose(1, 2).mul((-1) ** (l1 + l2 + l3)).clone()
-    if l2 <= l1 <= l3:
-        return _W3j[(l2, l1, l3)].transpose(0, 1).mul((-1) ** (l1 + l2 + l3)).clone()
-    if l3 <= l2 <= l1:
-        return _W3j[(l3, l2, l1)].transpose(0, 2).mul((-1) ** (l1 + l2 + l3)).clone()
-    if l2 <= l3 <= l1:
-        return _W3j[(l2, l3, l1)].transpose(0, 2).transpose(1, 2).clone()
-    if l3 <= l1 <= l2:
-        return _W3j[(l3, l1, l2)].transpose(0, 2).transpose(0, 1).clone()
-
-
-def direct_sum(*matrices):
-    """
-    Direct sum of matrices, put them in the diagonal
-    """
-    front_indices = matrices[0].shape[:-2]
-    m = sum(x.size(-2) for x in matrices)
-    n = sum(x.size(-1) for x in matrices)
-    total_shape = list(front_indices) + [m, n]
-    out = matrices[0].new_zeros(*total_shape)
-    i, j = 0, 0
-    for x in matrices:
-        m, n = x.shape[-2:]
-        out[..., i: i + m, j: j + n] = x
-        i += m
-        j += n
-    return out
-
-
-def rep(Rs, alpha, beta, gamma, parity=None):
-    """
-    Representation of O(3). Parity applied (-1)**parity times.
-    """
-    Rs = simplify(Rs)
-    if parity is None:
-        return direct_sum(*[irrep(l, alpha, beta, gamma) for mul, l, _ in Rs for _ in range(mul)])
-    else:
-        assert all(parity != 0 for _, _, parity in Rs)
-        return direct_sum(*[(p ** parity) * irrep(l, alpha, beta, gamma) for mul, l, p in Rs for _ in range(mul)])
-
-
-
-def convention(Rs):
-    """
-    :param Rs: list of triplet (multiplicity, representation order, [parity])
-    :return: conventional version of the same list which always includes parity
-    """
-    if isinstance(Rs, int):
-        return [(1, Rs, 0)]
-
-    out = []
-    for r in Rs:
-        if isinstance(r, int):
-            mul, l, p = 1, r, 0
-        elif len(r) == 2:
-            (mul, l), p = r, 0
-        elif len(r) == 3:
-            mul, l, p = r
-
-        assert isinstance(mul, int) and mul >= 0
-        assert isinstance(l, int) and l >= 0
-        assert p in [0, 1, -1]
-
-        out.append((mul, l, p))
-    return out
-
-
-def simplify(Rs):
-    """
-    :param Rs: list of triplet (multiplicity, representation order, [parity])
-    :return: An equivalent list with parity = {-1, 0, 1} and neighboring orders consolidated into higher multiplicity.
-
-    Note that simplify does not sort the Rs.
-    >>> simplify([(1, 1), (1, 1), (1, 0)])
-    [(2, 1, 0), (1, 0, 0)]
-
-    Same order Rs which are seperated from each other are not combined
-    >>> simplify([(1, 1), (1, 1), (1, 0), (1, 1)])
-    [(2, 1, 0), (1, 0, 0), (1, 1, 0)]
-
-    Parity is normalized to {-1, 0, 1}
-    >>> simplify([(1, 1, -1), (1, 1, 50), (1, 0, 0)])
-    [(1, 1, -1), (1, 1, 1), (1, 0, 0)]
-    """
-    out = []
-    Rs = convention(Rs)
-    for mul, l, p in Rs:
-        if out and out[-1][1:] == (l, p):
-            out[-1] = (out[-1][0] + mul, l, p)
-        elif mul > 0:
-            out.append((mul, l, p))
-    return out
-
-
-def dim(Rs):
-    """
-    :param Rs: list of triplet (multiplicity, representation order, [parity])
-    :return: dimention of the representation
-    """
-    Rs = convention(Rs)
-    return sum(mul * (2 * l + 1) for mul, l, _ in Rs)
-
-
-def lmax(Rs):
-    """
-    :param Rs: list of triplet (multiplicity, representation order, [parity])
-    :return: maximum l present in the signal
-    """
-    return max(l for mul, l, _ in convention(Rs) if mul > 0)
-
-
-def format_Rs(Rs):
-    """
-    :param Rs: list of triplet (multiplicity, representation order, [parity])
-    :return: simplified version of the same list with the parity
-    """
-    Rs = convention(Rs)
-    d = {
-        0: "",
-        1: "e",
-        -1: "o",
-    }
-    return ",".join("{}{}{}".format("{}x".format(mul) if mul > 1 else "", l, d[p]) for mul, l, p in Rs if mul > 0)
-
-
-def cut(features, *Rss, dim_=-1):
-    """
-    Cut `feaures` according to the list of Rs
-    ```
-    x = rs.randn(10, Rs1 + Rs2)
-    x1, x2 = cut(x, Rs1, Rs2)
-    ```
-    """
-    index = 0
-    outputs = []
-    for Rs in Rss:
-        n = dim(Rs)
-        yield features.narrow(dim_, index, n)
-        index += n
-    assert index == features.shape[dim_]
-    return outputs
 
 
 def spherical_harmonics(Rs, pos, normalization='none'):
@@ -196,7 +19,7 @@ def spherical_harmonics(Rs, pos, normalization='none'):
     :param pos: tensor of shape [..., 3]
     :return: tensor of shape [..., m]
     """
-    Rs = simplify(Rs)
+    Rs = o3.simplify(Rs)
     *size, _ = pos.shape
     pos = pos.reshape(-1, 3)
     d = torch.norm(pos, 2, dim=1)
@@ -231,15 +54,15 @@ def spherical_harmonics(Rs, pos, normalization='none'):
 
 @lru_cache()
 def _rep_zx(Rs, dtype, device):
-    return rep(Rs, 0, -math.pi / 2, 0).to(device=device, dtype=dtype)
+    return o3.rep(Rs, 0, -math.pi / 2, 0).to(device=device, dtype=dtype)
 
 
 def _spherical_harmonics_alpha_z_y(Rs, alpha, z, y):
     """
     spherical harmonics
     """
-    Rs = simplify(Rs)
-    sha = _spherical_harmonics_alpha(lmax(Rs), alpha.flatten())  # [z, m]
+    Rs = o3.simplify(Rs)
+    sha = _spherical_harmonics_alpha(o3.lmax(Rs), alpha.flatten())  # [z, m]
     shz = _spherical_harmonics_z(Rs, z.flatten(), y.flatten())  # [z, l * m]
     out = mul_m_lm(Rs, sha, shz)
     return out.reshape(alpha.shape + (shz.shape[1],))
@@ -279,7 +102,7 @@ def _spherical_harmonics_z(Rs, z, y=None):
     :param z: tensor of shape [...]
     :return: tensor of shape [..., l * m]
     """
-    Rs = simplify(Rs)
+    Rs = o3.simplify(Rs)
     for _, l, p in Rs:
         assert p in [0, (-1)**l]
     ls = [l for mul, l, _ in Rs]
