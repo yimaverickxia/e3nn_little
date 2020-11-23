@@ -1,6 +1,4 @@
 # pylint: disable=invalid-name, arguments-differ, missing-docstring, line-too-long, no-member, unbalanced-tuple-unpacking, abstract-method
-import copy
-
 import torch
 
 from e3nn_little import o3, nn
@@ -17,7 +15,6 @@ class Activation(torch.nn.Module):
         super().__init__()
 
         Rs = o3.simplify(Rs)
-        acts = copy.deepcopy(acts)
 
         n1 = sum(mul for mul, _, _ in Rs)
         n2 = sum(mul for mul, _ in acts if mul > 0)

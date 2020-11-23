@@ -368,6 +368,8 @@ CODE
         if own_weight:
             self.weight = torch.nn.Parameter(torch.randn(self.nweight))
 
+        self.to(dtype=torch.get_default_dtype())
+
     def __repr__(self):
         return "{name} ({Rs_in1} x {Rs_in2} -> {Rs_out} using {nw} paths)".format(
             name=self.__class__.__name__,

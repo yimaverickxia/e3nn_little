@@ -37,13 +37,6 @@ setup(
     install_requires=[
         'sympy',
         'torch>=1.4.0',
-        'torch_scatter',
-        'torch_sparse',
-        'torch_cluster',
-        'torch_spline_conv',
-        'torch_geometric',
-        'ase',
-        'pymatgen',
     ],
     include_package_data=True,
     classifiers=[
