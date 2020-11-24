@@ -1,5 +1,4 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except, abstract-method, arguments-differ
-import math
 from functools import partial
 
 import ase
@@ -11,7 +10,7 @@ from torch_scatter import scatter
 
 from e3nn_little import o3
 from e3nn_little.nn import (GatedBlockParity, GaussianRadialModel,
-                            GroupedWeightedTensorProduct, Linear, swish)
+                            WeightedTensorProduct, Linear, swish)
 
 
 qm9_target_dict = {
@@ -31,9 +30,9 @@ qm9_target_dict = {
 
 
 class Network(torch.nn.Module):
-    def __init__(self, mul=10, lmax=1,
-                 num_layers=2, cutoff=10.0, rad_gaussians=3,
-                 rad_h=200, rad_layers=2, num_neighbors=20,
+    def __init__(self, mul=30, lmax=1,
+                 num_layers=1, cutoff=10.0, rad_gaussians=40,
+                 rad_h=500, rad_layers=4, num_neighbors=20,
                  readout='add', dipole=False, mean=None, std=None, scale=None,
                  atomref=None, options=""):
         super(Network, self).__init__()
@@ -69,7 +68,7 @@ class Network(torch.nn.Module):
         Rs = [(mul, 0, 1)]
         for _ in range(num_layers):
             act = GatedBlockParity.make_gated_block(Rs, mul, lmax)
-            lay = Conv(Rs, act.Rs_in, self.Rs_sh, RadialModel, groups=1 if '1group' in self.options else math.inf)
+            lay = Conv(Rs, act.Rs_in, self.Rs_sh, RadialModel)
             extra = Linear(act.Rs_out, act.Rs_out) if 'extra' in self.options else None
             shortcut = Linear(Rs, act.Rs_out) if 'res' in self.options else None
 
@@ -89,83 +88,78 @@ class Network(torch.nn.Module):
             self.atomref.weight.data.copy_(atomref)
 
     def forward(self, z, pos, batch=None):
-        with profiler.record_function("Network:prep"):
-            assert z.dim() == 1 and z.dtype == torch.long
-            batch = torch.zeros_like(z) if batch is None else batch
+        assert z.dim() == 1 and z.dtype == torch.long
+        batch = torch.zeros_like(z) if batch is None else batch
 
-            h = self.embedding(z)
+        h = self.embedding(z)
 
-            edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
-            row, col = edge_index
-            edge_vec = pos[row] - pos[col]
-            sh = o3.spherical_harmonics(self.Rs_sh, edge_vec, 'component') / self.num_neighbors**0.5
+        edge_index = radius_graph(pos, r=self.cutoff, batch=batch)
+        row, col = edge_index
+        edge_vec = pos[row] - pos[col]
+        sh = o3.spherical_harmonics(self.Rs_sh, edge_vec, 'component') / self.num_neighbors**0.5
 
-        with profiler.record_function("Network:main"):
-            for lay, act, extra, shortcut in self.layers[:-1]:
-                if shortcut:
-                    s = shortcut(h)
+        for lay, act, extra, shortcut in self.layers[:-1]:
+            if shortcut:
+                s = shortcut(h)
 
-                h = lay(h, edge_index, edge_vec, sh)  # convolution
-                h = act(h)  # gate non linearity
+            h = lay(h, edge_index, edge_vec, sh)  # convolution
+            h = act(h)  # gate non linearity
 
-                if extra:
-                    h = extra(h)  # optional extra linear layer
+            if extra:
+                h = extra(h)  # optional extra linear layer
 
-                if shortcut:
-                    m = shortcut.output_mask
-                    h = 0.5**0.5 * s + (1 * (1-m) + 0.5**0.5 * m) * h
+            if shortcut:
+                m = shortcut.output_mask
+                h = 0.5**0.5 * s + (1 * (1-m) + 0.5**0.5 * m) * h
 
-            h = self.layers[-1](h, edge_index, edge_vec, sh)
+        h = self.layers[-1](h, edge_index, edge_vec, sh)
 
-        with profiler.record_function("Network:finalize"):
-            if self.dipole:
-                # Get center of mass.
-                mass = self.atomic_mass[z].view(-1, 1)
-                c = scatter(mass * pos, batch, dim=0) / scatter(mass, batch, dim=0)
-                h = h * (pos - c[batch])
+        if self.dipole:
+            # Get center of mass.
+            mass = self.atomic_mass[z].view(-1, 1)
+            c = scatter(mass * pos, batch, dim=0) / scatter(mass, batch, dim=0)
+            h = h * (pos - c[batch])
 
-            if not self.dipole and self.mean is not None and self.std is not None:
-                h = h * self.std + self.mean
+        if not self.dipole and self.mean is not None and self.std is not None:
+            h = h * self.std + self.mean
 
-            if not self.dipole and self.atomref is not None:
-                h = h + self.atomref(z)
+        if not self.dipole and self.atomref is not None:
+            h = h + self.atomref(z)
 
-            out = scatter(h, batch, dim=0, reduce=self.readout)
+        out = scatter(h, batch, dim=0, reduce=self.readout)
 
-            if self.dipole:
-                out = torch.norm(out, dim=-1, keepdim=True)
+        if self.dipole:
+            out = torch.norm(out, dim=-1, keepdim=True)
 
-            if self.scale is not None:
-                out = self.scale * out
+        if self.scale is not None:
+            out = self.scale * out
 
-            return out
+        return out
 
 
 class Conv(MessagePassing):
-    def __init__(self, Rs_in, Rs_out, Rs_sh, RadialModel, groups=math.inf, normalization='component'):
+    def __init__(self, Rs_in, Rs_out, Rs_sh, RadialModel, normalization='component'):
         super().__init__(aggr='add')
         self.Rs_in = o3.simplify(Rs_in)
         self.Rs_out = o3.simplify(Rs_out)
 
-        self.lin1 = Linear(Rs_in, Rs_out)
-        self.tp = GroupedWeightedTensorProduct(Rs_in, Rs_sh, Rs_out, groups=groups, normalization=normalization, own_weight=False)
+        self.si = Linear(Rs_in, Rs_out)
+        self.tp = WeightedTensorProduct(Rs_in, Rs_sh, Rs_out, normalization=normalization, own_weight=False)
         self.rm = RadialModel(self.tp.nweight)
-        self.lin2 = Linear(Rs_out, Rs_out) if groups > 1 else None
+
         self.Rs_sh = Rs_sh
         self.normalization = normalization
 
     def forward(self, x, edge_index, edge_vec, sh, size=None):
         with profiler.record_function("Conv"):
             # x = [num_atoms, dim(Rs_in)]
-            self_interation = self.lin1(x)
+            s = self.si(x)
 
             w = self.rm(edge_vec.norm(dim=1))  # [num_messages, nweight]
             x = self.propagate(edge_index, size=size, x=x, sh=sh, w=w)
-            if self.lin2:
-                x = self.lin2(x)
 
-            si = self.lin1.output_mask
-            return 0.5**0.5 * self_interation + (1 + (0.5**0.5 - 1) * si) * x
+            m = self.si.output_mask
+            return 0.5**0.5 * s + (1 + (0.5**0.5 - 1) * m) * x
 
     def message(self, x_j, sh, w):
         return self.tp(x_j, sh, w)
