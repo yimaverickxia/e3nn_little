@@ -1,11 +1,12 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except, abstract-method, arguments-differ
 import argparse
+import datetime
+import itertools
 import pickle
 import subprocess
 import time
 
 import torch
-from torch.autograd import profiler
 from torch_geometric.data import DataLoader
 from torch_geometric.datasets import QM9
 from torch_geometric.nn import SchNet
@@ -18,92 +19,121 @@ def execute(args):
     dataset = QM9(path)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    target = 7
     # Report meV instead of eV.
-    units = 1000 if target in [2, 3, 4, 6, 7, 8, 9, 10] else 1
+    units = 1000 if args.target in [2, 3, 4, 6, 7, 8, 9, 10] else 1
 
-    _, datasets = SchNet.from_qm9_pretrained(path, dataset, target)
+    _, datasets = SchNet.from_qm9_pretrained(path, dataset, args.target)
     train_dataset, val_dataset, _test_dataset = datasets
 
     model = Network(
-        muls=(args.mul0, args.mul1, args.mul2), lmax=args.lmax, num_layers=args.num_layers, rad_gaussians=args.rad_gaussians,
+        muls=(args.mul0, args.mul1, args.mul2),
+        ps=(1,) if 'shp' in args.opts else (1, -1),
+        lmax=args.lmax,
+        num_layers=args.num_layers,
+        rad_gaussians=args.rad_gaussians,
         rad_hs=(args.rad_h,) * args.rad_layers + (args.rad_bottleneck,),
-        mean=0, std=1, atomref=dataset.atomref(target),
-        options=args.arch
+        groups=args.groups,
+        mean=args.mean, std=args.std,
+        atomref=dataset.atomref(args.target),
+        options=args.opts
     )
     model = model.to(device)
 
     # profile
     loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=False)
     for step, data in enumerate(loader):
-        with profiler.profile(use_cuda=True) as prof:
+        with torch.autograd.profiler.profile(use_cuda=True, record_shapes=True) as prof:
             data = data.to(device)
             pred = model(data.z, data.pos, data.batch)
-            mse = (pred.view(-1) - data.y[:, target]).pow(2)
+            mse = (pred.view(-1) - data.y[:, args.target]).pow(2)
             mse.mean().backward()
-        print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10), flush=True)
-        prof.export_chrome_trace("trace.json")
-        if step == 2:
+        if step == 5:
             break
+    prof.export_chrome_trace(f"{datetime.datetime.now()}.json")
 
     optim = torch.optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, patience=25, factor=0.8, min_lr=1e-6)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, patience=25, factor=0.5, verbose=True)
 
     dynamics = []
     wall = time.perf_counter()
     wall_print = time.perf_counter()
 
-    for epoch in range(args.num_epochs):
+    for epoch in itertools.count():
 
-        maes = []
+        errs = []
         loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=True)
         for step, data in enumerate(loader):
             data = data.to(device)
 
             pred = model(data.z, data.pos, data.batch)
             optim.zero_grad()
-            (pred.view(-1) - data.y[:, target]).pow(2).mean().backward()
+            (pred.view(-1) - data.y[:, args.target]).pow(2).mean().backward()
             optim.step()
 
-            mae = (pred.view(-1) - data.y[:, target]).abs()
-            maes += [mae.cpu().detach()]
+            err = pred.view(-1) - data.y[:, args.target]
+            errs += [err.cpu().detach()]
 
             if time.perf_counter() - wall_print > 15:
                 wall_print = time.perf_counter()
+                w = time.perf_counter() - wall
+                e = epoch + (step + 1) / len(loader)
                 print((
-                    f'[{epoch}] ['
-                    f'wall={time.perf_counter() - wall:.0f} step={step}/{len(loader)} '
-                    f'mae={units * torch.cat(maes)[-200:].mean():.5f} '
+                    f'[{e:.1f}] ['
+                    f'wall={w / 3600:.2f}h '
+                    f'wall/epoch={w / e:.0f}s '
+                    f'wall/step={1e3 * w / e / len(loader):.0f}ms '
+                    f'step={step}/{len(loader)} '
+                    f'mae={units * torch.cat(errs)[-200:].abs().mean():.5f} '
                     f'lr={optim.param_groups[0]["lr"]:.1e}]'
                 ), flush=True)
 
-        train_mae = torch.cat(maes)
+        train_err = torch.cat(errs)
 
-        maes = []
+        errs = []
         loader = DataLoader(val_dataset, batch_size=256)
         for data in loader:
             data = data.to(device)
             with torch.no_grad():
                 pred = model(data.z, data.pos, data.batch)
 
-            mae = (pred.view(-1) - data.y[:, target]).abs()
-            maes += [mae.cpu().detach()]
-        val_mae = torch.cat(maes)
+            err = pred.view(-1) - data.y[:, args.target]
+            errs += [err.cpu().detach()]
+        val_err = torch.cat(errs)
 
         dynamics += [{
             'epoch': epoch,
             'wall': time.perf_counter() - wall,
-            'train_mae': units * train_mae,
-            'val_mae': units * val_mae,
+            'train': {
+                'mae': {
+                    'mean': units * train_err.abs().mean().item(),
+                    'std': units * train_err.abs().std().item(),
+                },
+                'mse': {
+                    'mean': units * train_err.pow(2).mean().item(),
+                    'std': units * train_err.pow(2).std().item(),
+                }
+            },
+            'val': {
+                'mae': {
+                    'mean': units * val_err.abs().mean().item(),
+                    'std': units * val_err.abs().std().item(),
+                },
+                'mse': {
+                    'mean': units * val_err.pow(2).mean().item(),
+                    'std': units * val_err.pow(2).std().item(),
+                }
+            },
+            'lr': optim.param_groups[0]["lr"],
         }]
 
-        print(f'[{epoch}] Target: {target:02d}, MAE TRAIN: {units * train_mae.mean():.5f} ± {units * train_mae.std():.5f}, MAE VAL: {units * val_mae.mean():.5f} ± {units * val_mae.std():.5f}', flush=True)
+        print(f'[{epoch}] Target: {args.target:02d}, MAE TRAIN: {units * train_err.abs().mean():.5f} ± {units * train_err.abs().std():.5f}, MAE VAL: {units * val_err.abs().mean():.5f} ± {units * val_err.abs().std():.5f}', flush=True)
 
-        scheduler.step(val_mae.pow(2).mean())
+        scheduler.step(val_err.pow(2).mean())
 
         yield {
             'args': args,
             'dynamics': dynamics,
+            'state': {k: v.cpu() for k, v in model.state_dict().items()},
         }
 
 
@@ -115,19 +145,22 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--mul0", type=int, default=30)
-    parser.add_argument("--mul1", type=int, default=10)
+    parser.add_argument("--mul0", type=int, default=64)
+    parser.add_argument("--mul1", type=int, default=16)
     parser.add_argument("--mul2", type=int, default=0)
     parser.add_argument("--lmax", type=int, default=1)
-    parser.add_argument("--num_layers", type=int, default=1)
+    parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--rad_gaussians", type=int, default=40)
-    parser.add_argument("--rad_h", type=int, default=200)
+    parser.add_argument("--rad_h", type=int, default=400)
     parser.add_argument("--rad_bottleneck", type=int, default=50)
-    parser.add_argument("--rad_layers", type=int, default=4)
+    parser.add_argument("--rad_layers", type=int, default=3)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--bs", type=int, default=128)
-    parser.add_argument("--num_epochs", type=int, default=100)
-    parser.add_argument("--arch", type=str, default="")
+    parser.add_argument("--opts", type=str, default="")
+    parser.add_argument("--groups", type=int, default=2)
+    parser.add_argument("--target", type=int, default=7)
+    parser.add_argument("--mean", type=float, default=0)
+    parser.add_argument("--std", type=float, default=1)
 
     args = parser.parse_args()
 

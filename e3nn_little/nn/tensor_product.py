@@ -3,27 +3,26 @@ import math
 from typing import List, Tuple
 
 import torch
-from torch.autograd import profiler
 from e3nn_little import o3
 from e3nn_little.util import eval_code
 
 
-def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own_weight=True):
+def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own_weight=True, weight_batch=False):
     Rs_in1 = o3.simplify(Rs_in1)
     Rs_in2 = o3.simplify(Rs_in2)
     Rs_out = o3.simplify(Rs_out)
 
     instr = [
-        (i_1, i_2, i_out, 'uvw')
+        (i_1, i_2, i_out, 'uvw', True)
         for i_1, (_, l_1, p_1) in enumerate(Rs_in1)
         for i_2, (_, l_2, p_2) in enumerate(Rs_in2)
         for i_out, (_, l_out, p_out) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
     ]
-    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight)
+    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight, weight_batch)
 
 
-def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normalization='component', own_weight=True):
+def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normalization='component', own_weight=True, weight_batch=False):
     Rs_in1 = o3.convention(Rs_in1)
     Rs_in2 = o3.convention(Rs_in2)
     Rs_out = o3.convention(Rs_out)
@@ -34,14 +33,14 @@ def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normal
     Rs_out = [(mul // groups + (g < mul % groups), l, p) for mul, l, p in Rs_out for g in range(groups)]
 
     instr = [
-        (i_1, i_2, i_out, 'uvw')
+        (i_1, i_2, i_out, 'uvw', True)
         for i_1, (_, l_1, p_1) in enumerate(Rs_in1)
         for i_2, (_, l_2, p_2) in enumerate(Rs_in2)
         for i_out, (_, l_out, p_out) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
         if i_1 % groups == i_out % groups
     ]
-    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight)
+    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight, weight_batch)
 
 
 def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
@@ -72,7 +71,7 @@ def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
             i_out = len(Rs_out)
             Rs_out.append((mul, l, p_1 * p_2))
             instr += [
-                (i, i, i_out, 'uuu')
+                (i, i, i_out, 'uuu', False)
             ]
 
     return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight=False)
@@ -86,7 +85,7 @@ class Linear(torch.nn.Module):
         self.Rs_out = o3.simplify(Rs_out)
 
         instr = [
-            (i_in, 0, i_out, 'uvw')
+            (i_in, 0, i_out, 'uvw', True)
             for i_in, (_, l_in, p_in) in enumerate(self.Rs_in)
             for i_out, (_, l_out, p_out) in enumerate(self.Rs_out)
             if l_in == l_out and p_in == p_out
@@ -119,29 +118,39 @@ class CustomWeightedTensorProduct(torch.nn.Module):
             Rs_in1,
             Rs_in2,
             Rs_out,
-            instr: List[Tuple[int, int, int, str]],
+            instr: List[Tuple[int, int, int, str, bool]],
             normalization: str = 'component',
             own_weight: bool = True,
+            weight_batch: bool = False,
             _specialized_code=True,
         ):
         """
         Create a Tensor Product operation that has each of his path weighted by a parameter.
         `instr` is a list of instructions.
-        An instruction if of the form (i_1, i_2, i_out, mode)
+        An instruction if of the form (i_1, i_2, i_out, mode, weight)
         it means "Put `Rs_in1[i_1] otimes Rs_in2[i_2] into Rs_out[i_out]"
         `mode` determines the way the multiplicities are treated.
+        `weight` determines if weights has to be used.
         The default mode should be 'uvw', meaning that all paths are created.
         """
 
         super().__init__()
 
-        assert normalization in ['component', 'norm']
+        assert normalization in ['component', 'norm'], normalization
 
         self.Rs_in1 = o3.convention(Rs_in1)
         self.Rs_in2 = o3.convention(Rs_in2)
         self.Rs_out = o3.convention(Rs_out)
 
-        code = ""
+        code = f"""
+import torch
+
+@torch.jit.script
+def main(< w3j >x1: torch.Tensor, x2: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    batch = x1.shape[0]
+    out = x1.new_zeros((batch, {o3.dim(self.Rs_out)}))
+    ein = torch.einsum
+"""
 
         index_w = 0
         wigners = set()
@@ -163,7 +172,7 @@ class CustomWeightedTensorProduct(torch.nn.Module):
 
         last_ss = None
 
-        for i_1, i_2, i_out, mode in instr:
+        for i_1, i_2, i_out, mode, weight in instr:
             mul_1, l_1, p_1 = self.Rs_in1[i_1]
             mul_2, l_2, p_2 = self.Rs_in2[i_2]
             mul_out, l_out, p_out = self.Rs_out[i_out]
@@ -180,9 +189,13 @@ class CustomWeightedTensorProduct(torch.nn.Module):
             if dim_1 == 0 or dim_2 == 0 or dim_out == 0:
                 continue
 
-            code += f"    # {l_1} x {l_2} = {l_out}\n"
-            code += f"    s1 = x1_{i_1}\n"
-            code += f"    s2 = x2_{i_2}\n"
+            code += (
+                f"    with torch.autograd.profiler.record_function("
+                f"'{o3.format_Rs([self.Rs_in1[i_1]])} x {o3.format_Rs([self.Rs_in2[i_2]])} "
+                f"= {o3.format_Rs([self.Rs_out[i_out]])} {mode} {weight}'):\n"
+            )
+            code += f"        s1 = x1_{i_1}\n"
+            code += f"        s2 = x2_{i_2}\n"
 
             assert mode in ['uvw', 'uvu', 'uvv', 'uuw', 'uuu', 'uvuv']
 
@@ -194,64 +207,65 @@ class CustomWeightedTensorProduct(torch.nn.Module):
                 # L x L = 0
                 # 1 x 1 = 1
 
-                if (l_1, l_2, l_out) == (0, 0, 0) and mode == 'uvw' and normalization in ['component', 'norm']:
-                    code += f"    s1 = s1.reshape(batch, {mul_1})\n"
-                    code += f"    s2 = s2.reshape(batch, {mul_2})\n"
+                if (l_1, l_2, l_out) == (0, 0, 0) and mode == 'uvw' and normalization in ['component', 'norm'] and weight:
+                    code += f"        s1 = s1.reshape(batch, {mul_1})\n"
+                    code += f"        s2 = s2.reshape(batch, {mul_2})\n"
+
                     dim_w = mul_1 * mul_2 * mul_out
-                    code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out})\n"
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out})\n"
                     index_w += dim_w
-                    code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,zu,zv->zw', sw, s1, s2)\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,zu,zv->zw', sw, s1, s2)\n"
                     code += "\n"
 
                     for pos in range(index_out, index_out + dim_out):
                         count[pos] += mul_1 * mul_2
                     continue
 
-                if l_1 == 0 and l_2 == l_out and mode == 'uvw' and normalization == 'component':
-                    code += f"    s1 = s1.reshape(batch, {mul_1})\n"
+                if l_1 == 0 and l_2 == l_out and mode == 'uvw' and normalization == 'component' and weight:
+                    code += f"        s1 = s1.reshape(batch, {mul_1})\n"
                     dim_w = mul_1 * mul_2 * mul_out
-                    code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out})\n"
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out})\n"
                     index_w += dim_w
-                    code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,zu,zvi->zwi', sw, s1, s2).reshape(batch, {dim_out})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,zu,zvi->zwi', sw, s1, s2).reshape(batch, {dim_out})\n"
                     code += "\n"
 
                     for pos in range(index_out, index_out + dim_out):
                         count[pos] += mul_1 * mul_2
                     continue
 
-                if l_2 == 0 and l_1 == l_out and mode == 'uvw' and normalization == 'component':
-                    code += f"    s2 = s2.reshape(batch, {mul_2})\n"
+                if l_2 == 0 and l_1 == l_out and mode == 'uvw' and normalization == 'component' and weight:
+                    code += f"        s2 = s2.reshape(batch, {mul_2})\n"
                     dim_w = mul_1 * mul_2 * mul_out
-                    code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out})\n"
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out})\n"
                     index_w += dim_w
-                    code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,zui,zv->zwi', sw, s1, s2).reshape(batch, {dim_out})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,zui,zv->zwi', sw, s1, s2).reshape(batch, {dim_out})\n"
                     code += "\n"
 
                     for pos in range(index_out, index_out + dim_out):
                         count[pos] += mul_1 * mul_2
                     continue
 
-                if l_1 == l_2 and l_out == 0 and mode == 'uvw' and normalization == 'component':
+                if l_1 == l_2 and l_out == 0 and mode == 'uvw' and normalization == 'component' and weight:
                     # Cl_l_0 = eye(3) / sqrt(2L+1)
                     dim_w = mul_1 * mul_2 * mul_out
-                    code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out}).div({(2 * l_1 + 1)**0.5})\n"
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out}).div({(2 * l_1 + 1)**0.5})\n"
                     index_w += dim_w
-                    code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,zui,zvi->zw', sw, s1, s2).reshape(batch, {dim_out})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,zui,zvi->zw', sw, s1, s2).reshape(batch, {dim_out})\n"
                     code += "\n"
 
                     for pos in range(index_out, index_out + dim_out):
                         count[pos] += mul_1 * mul_2
                     continue
 
-                if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvw' and normalization == 'component':
+                if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvw' and normalization == 'component' and weight:
                     # C1_1_1 = levi-civita / sqrt(2)
-                    code += f"    s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
-                    code += f"    s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
-                    code += f"    s1, s2 = torch.broadcast_tensors(s1, s2)\n"
+                    code += f"        s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
+                    code += f"        s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
+                    code += f"        s1, s2 = torch.broadcast_tensors(s1, s2)\n"
                     dim_w = mul_1 * mul_2 * mul_out
-                    code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out}).div({2**0.5})\n"
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out}).div({2**0.5})\n"
                     index_w += dim_w
-                    code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,zuvi->zwi', sw, torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,zuvi->zwi', sw, torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n"
                     code += "\n"
 
                     for pos in range(index_out, index_out + dim_out):
@@ -260,60 +274,80 @@ class CustomWeightedTensorProduct(torch.nn.Module):
 
             if last_ss != (i_1, i_2, mode[:2]):
                 if mode[:2] == 'uv':
-                    code += f"    ss = ein('zui,zvj->zuvij', s1, s2)\n"
+                    code += f"        ss = ein('zui,zvj->zuvij', s1, s2)\n"
                 if mode[:2] == 'uu':
-                    code += f"    ss = ein('zui,zuj->zuij', s1, s2)\n"
+                    code += f"        ss = ein('zui,zuj->zuij', s1, s2)\n"
                 last_ss = (i_1, i_2, mode[:2])
 
             wigners.add((l_1, l_2, l_out))
 
             if mode == 'uvw':
+                assert weight
                 dim_w = mul_1 * mul_2 * mul_out
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2}, {mul_out})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuvw,ijk,zuvij->zwk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2}, {mul_out})\n"
+                code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uvw,ijk,zuvij->zwk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += mul_1 * mul_2
 
             if mode == 'uvu':
                 assert mul_1 == mul_out
-                dim_w = mul_1 * mul_2
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuv,ijk,zuvij->zuk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                if weight:
+                    dim_w = mul_1 * mul_2
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uv,ijk,zuvij->zuk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                else:
+                    dim_w = 0
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += mul_2
 
             if mode == 'uvv':
                 assert mul_2 == mul_out
-                dim_w = mul_1 * mul_2
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_2})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuv,ijk,zuvij->zvk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                if weight:
+                    dim_w = mul_1 * mul_2
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uv,ijk,zuvij->zvk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                else:
+                    dim_w = 0
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zvk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += mul_1
 
             if mode == 'uuw':
                 assert mul_1 == mul_2
+                assert weight
                 dim_w = mul_1 * mul_out
-                code += f"    sw = w[:, {index_w}:{index_w+dim_w}].reshape(batch, {mul_1}, {mul_out})\n"
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('zuw,ijk,zuij->zwk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_out})\n"
+                code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uw,ijk,zuij->zwk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += mul_1
 
             if mode == 'uuu':
                 assert mul_1 == mul_2 == mul_out
-                dim_w = 0
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuij->zuk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                if weight:
+                    dim_w = mul_1
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >u,ijk,zuij->zuk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                else:
+                    dim_w = 0
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuij->zuk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += 1
 
             if mode == 'uvuv':
                 assert mul_1 * mul_2 == mul_out
-                dim_w = 0
-                code += f"    out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuvk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                if weight:
+                    dim_w = mul_1 * mul_2
+                    code += f"        sw = w[< weight index >{index_w}:{index_w+dim_w}].reshape(< weight shape >{mul_1}, {mul_2})\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('< weight sym >uv,ijk,zuvij->zuvk', sw, C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
+                else:
+                    dim_w = 0
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuvk', C{l_1}_{l_2}_{l_out}, ss).reshape(batch, {dim_out})\n"
 
                 for pos in range(index_out, index_out + dim_out):
                     count[pos] += 1
@@ -348,28 +382,27 @@ class CustomWeightedTensorProduct(torch.nn.Module):
 
             self.register_buffer(arg, wig)
 
-        x = """
-import torch
+        code += f"    return out"
 
-@torch.jit.script
-def main(ARGSx1: torch.Tensor, x2: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    batch = x1.shape[0]
-    out = x1.new_zeros((batch, DIM))
-    ein = torch.einsum
-
-CODE
-    return out
-"""
-        x = x.replace("DIM", f"{o3.dim(self.Rs_out)}")
-        x = x.replace("ARGS", args)
-        x = x.replace("CODE", code)
+        code = code.replace("< w3j >", args)
         if index_w == 0:
-            x = x.replace(', w: torch.Tensor', '')
+            code = code.replace(', w: torch.Tensor', '')
 
-        self.code = x
-        self.main = eval_code(x).main
+        self.weight_batch = weight_batch
+        if self.weight_batch:
+            code = code.replace('< weight index >', ':, ')
+            code = code.replace('< weight shape >', 'batch, ')
+            code = code.replace('< weight sym >', 'z')
+        else:
+            code = code.replace('< weight index >', '')
+            code = code.replace('< weight shape >', '')
+            code = code.replace('< weight sym >', '')
+
+        self.code = code
+        self.main = eval_code(self.code).main
         self.nweight = index_w
         if own_weight:
+            assert not self.weight_batch, "weight_batch and own_weight are incompatible"
             self.weight = torch.nn.Parameter(torch.randn(self.nweight))
 
         self.to(dtype=torch.get_default_dtype())
@@ -387,7 +420,7 @@ CODE
         """
         :return:         tensor [..., channel]
         """
-        with profiler.record_function(repr(self)):
+        with torch.autograd.profiler.record_function(repr(self)):
             *size, n = features_1.size()
             features_1 = features_1.reshape(-1, n)
             assert n == o3.dim(self.Rs_in1), f"{n} is not {o3.dim(self.Rs_in1)}"
@@ -399,9 +432,13 @@ CODE
             if self.nweight:
                 if weight is None:
                     weight = self.weight
-                weight = weight.reshape(-1, self.nweight)
-                if weight.shape[0] == 1:
-                    weight = weight.repeat(features_1.shape[0], 1)
+                if self.weight_batch:
+                    *size3, n = weight.shape
+                    assert n == self.nweight
+                    assert size3 == size
+                    weight = weight.reshape(-1, self.nweight)
+                else:
+                    assert weight.shape == (self.nweight,), f'{weight.shape} but expected {(self.nweight,)}'
 
             wigners = [getattr(self, arg) for arg in self.wigners_names]
 
