@@ -13,14 +13,14 @@ Small version of [e3nn](https://github.com/e3nn/e3nn/)
 - [x] radial networks
 - [x] Tensor Product (Weighted)
 - [x] message_passing (in examples)
+- [x] reduce_tensor
+- [x] tests!
 - [ ] s2grid
-- [ ] reduce_tensor
 - [ ] s2/so3 activation
 - [ ] batchnorm
 - [ ] dropout
 - [ ] groupnorm
 - [ ] image convolution (requires kernel?!)
-- [ ] tests!
 - [ ] cuda kernels!
 - [ ] tensor classes
 

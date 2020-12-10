@@ -18,17 +18,17 @@ def _z_rot_mat(angle, l):
     on the diagonal and anti-diagonal are non-zero, so explicitly constructing
     this matrix is unnecessary.
     """
-    M = torch.zeros(2 * l + 1, 2 * l + 1, dtype=torch.float64)
+    M = torch.zeros(2 * l + 1, 2 * l + 1, dtype=torch.get_default_dtype())
     inds = torch.arange(0, 2 * l + 1, 1)
     reversed_inds = torch.arange(2 * l, -1, -1)
-    frequencies = torch.arange(l, -l - 1, -1, dtype=torch.float64)
+    frequencies = torch.arange(l, -l - 1, -1, dtype=torch.get_default_dtype())
     M[inds, reversed_inds] = torch.sin(frequencies * angle)
     M[inds, inds] = torch.cos(frequencies * angle)
     return M
 
 
 def irrep(l, alpha, beta, gamma):
-    J = _Jd[l]
+    J = _Jd[l].to(dtype=torch.get_default_dtype())
     Xa = _z_rot_mat(alpha, l)
     Xb = _z_rot_mat(beta, l)
     Xc = _z_rot_mat(gamma, l)

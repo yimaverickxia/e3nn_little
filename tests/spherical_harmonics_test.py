@@ -58,7 +58,7 @@ def test_sh_is_in_irrep():
 
 def test_rsh_backwardable():
     torch.set_default_dtype(torch.float64)
-    lmax = 10
+    lmax = 3
     Rs = [(1, l) for l in range(lmax + 1)]
 
     xyz = torch.tensor([
