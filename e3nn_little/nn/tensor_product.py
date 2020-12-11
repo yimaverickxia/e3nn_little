@@ -443,16 +443,17 @@ def main(< w3j >x1: torch.Tensor, x2: torch.Tensor, w: torch.Tensor) -> torch.Te
             index_w += dim_w
             code += "\n"
 
-        ilast = 0
-        clast = count[0]
-        for i, c in enumerate(count):
-            if clast != c:
-                if clast > 1:
-                    code += f"    out[:, {ilast}:{i}].div_({clast ** 0.5})\n"
-                clast = c
-                ilast = i
-        if clast > 1:
-            code += f"    out[:, {ilast}:].div_({clast ** 0.5})\n"
+        if count:
+            ilast = 0
+            clast = count[0]
+            for i, c in enumerate(count):
+                if clast != c:
+                    if clast > 1:
+                        code += f"    out[:, {ilast}:{i}].div_({clast ** 0.5})\n"
+                    clast = c
+                    ilast = i
+            if clast > 1:
+                code += f"    out[:, {ilast}:].div_({clast ** 0.5})\n"
 
         wigners = sorted(wigners)
         self.wigners_names = [f"C{l_1}_{l_2}_{l_3}" for l_1, l_2, l_3 in wigners]

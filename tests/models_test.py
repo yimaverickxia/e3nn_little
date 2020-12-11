@@ -16,3 +16,14 @@ def test(dtype):
     out = Network()(z, pos, batch)
 
     assert out.shape == (50, 1)
+
+
+def test_scalar():
+    i = torch.arange(1000)
+    z = i % 100
+    pos = torch.randn(len(z), 3)
+    batch = i % 50
+
+    out = Network(muls=(16,), lmax=0)(z, pos, batch)
+
+    assert out.shape == (50, 1)
