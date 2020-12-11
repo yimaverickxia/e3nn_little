@@ -4,3 +4,4 @@ from .cartesian_spherical_harmonics import *  # noqa
 from .angular_spherical_harmonics import *  # noqa
 from .wigner import *  # noqa
 from .cartesian import *  # noqa
+from .reduce_tensor import *  # noqa

@@ -37,8 +37,8 @@ def intertwiners(group: Group, D1, D2, eps=1e-9):
     return torch.stack(solutions) if len(solutions) > 0 else torch.zeros(0, I1.shape[0], I2.shape[0])
 
 
-def reduce(group: Group, D, D_small, eps=1e-9):
-    """
+def has_rep_in_rep(group: Group, D, D_small, eps=1e-9):
+    """computes if a representation appears in another one
     Given a "big" representation and a "small" representation
     computes how many times the small appears in the big one and return:
     - how many times the "small" appears in the "big"

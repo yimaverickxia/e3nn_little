@@ -17,6 +17,9 @@ class Group(ABC):
     def irrep(self, r):
         return NotImplemented
 
+    def irrep_dim(self, r):
+        return self.irrep(r)(self.identity()).shape[0]
+
     @abstractmethod
     def compose(self, g1, g2):
         return NotImplemented
@@ -44,6 +47,9 @@ class SO3(Group):
             return o3.irrep(r, *g)
         return f
 
+    def irrep_dim(self, r):
+        return 2 * r + 1
+
     def compose(self, g1, g2):
         return o3.compose(*g1, *g2)
 
@@ -70,6 +76,10 @@ class O3(Group):
             *abc, k = g
             return o3.irrep(l, *abc) * p**k
         return f
+
+    def irrep_dim(self, r):
+        l, _ = r
+        return 2 * l + 1
 
     def compose(self, g1, g2):
         *abc1, p1 = g1

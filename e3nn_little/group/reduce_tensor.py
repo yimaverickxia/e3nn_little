@@ -2,18 +2,18 @@
 import itertools
 
 import torch
-from e3nn_little import o3, perm
-from e3nn_little.group import O3, SO3, is_representation, reduce
+from e3nn_little import perm
+from e3nn_little.group import Group, has_rep_in_rep, is_representation
 from e3nn_little.math import direct_sum, kron
 from e3nn_little.util import torch_default_dtype
 
 
-def reduce_tensor(formula, eps=1e-9, has_parity=None, **kw_Rs):
-    """
+def reduce_tensor(group: Group, formula, eps=1e-9, **kw_representations):
+    """reduce a tensor with symmetries into irreducible representations
     Usage
-    Rs, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=[(1, 1)])
-    Rs = 0,2,4
-    Q = tensor of shape [15, 81]
+    Rs, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=rep)
+    Rs = [(mul1, r1), (mul2, r2), ...]
+    Q = tensor of shape [15, 3, 3, 3, 3]
     """
     dtype = torch.get_default_dtype()
     with torch_default_dtype(torch.float64):
@@ -49,40 +49,23 @@ def reduce_tensor(formula, eps=1e-9, has_parity=None, **kw_Rs):
             if len(formulas) == n:
                 break  # we break when the set is stable => it is now a group \o/
 
-        # lets clean the `kw_Rs` before checking that they are compatible with the formulas
-        for i in kw_Rs:
-            if not callable(kw_Rs[i]):
-                Rs = o3.convention(kw_Rs[i])
-                if has_parity is None:
-                    has_parity = any(p != 0 for _, _, p in Rs)
-                if not has_parity and not all(p == 0 for _, _, p in Rs):
-                    raise RuntimeError(f'{o3.format_Rs(Rs)} parity has to be specified everywhere or nowhere')
-                if has_parity and any(p == 0 for _, _, p in Rs):
-                    raise RuntimeError(f'{o3.format_Rs(Rs)} parity has to be specified everywhere or nowhere')
-                kw_Rs[i] = Rs
-
-        if has_parity is None:
-            raise RuntimeError(f'please specify the argument `has_parity`')
-
-        group = O3() if has_parity else SO3()
-
         # here we check that each index has one and only one representation
         for _s, p in formulas:
             f = "".join(f0[i] for i in p)
             for i, j in zip(f0, f):
-                if i in kw_Rs and j in kw_Rs and kw_Rs[i] != kw_Rs[j]:
-                    raise RuntimeError(f'Rs of {i} (Rs={o3.format_Rs(kw_Rs[i])}) and {j} (Rs={o3.format_Rs(kw_Rs[j])}) should be the same')
-                if i in kw_Rs:
-                    kw_Rs[j] = kw_Rs[i]
-                if j in kw_Rs:
-                    kw_Rs[i] = kw_Rs[j]
+                if i in kw_representations and j in kw_representations and kw_representations[i] != kw_representations[j]:
+                    raise RuntimeError(f'rep of {i} and {j} should be the same')
+                if i in kw_representations:
+                    kw_representations[j] = kw_representations[i]
+                if j in kw_representations:
+                    kw_representations[i] = kw_representations[j]
 
         for i in f0:
-            if i not in kw_Rs:
-                raise RuntimeError(f'index {i} has not Rs associated to it')
+            if i not in kw_representations:
+                raise RuntimeError(f'index {i} has no representations associated to it')
 
         ide = group.identity()
-        dims = {i: len(kw_Rs[i](*ide)) if callable(kw_Rs[i]) else o3.dim(kw_Rs[i]) for i in f0}  # dimension of each index
+        dims = {i: len(kw_representations[i](ide)) for i in f0}  # dimension of each index
         full_base = list(itertools.product(*(range(dims[i]) for i in f0)))  # (0, 0, 0), (0, 0, 1), (0, 0, 2), ... (3, 3, 3)
         # len(full_base) degrees of freedom in an unconstrained tensor
 
@@ -125,40 +108,34 @@ def reduce_tensor(formula, eps=1e-9, has_parity=None, **kw_Rs):
 
         # We project the representation on the basis `base`
         def representation(g):
-            def re(r):
-                if callable(r):
-                    return r(*g)
-                return o3.rep(r, *g)
-
-            m = kron(*(re(kw_Rs[i]) for i in f0))
+            m = kron(*(kw_representations[i](g) for i in f0))
             return Q @ m @ Q.T
 
         # And check that after this projection it is still a representation
         assert is_representation(group, representation, eps)
 
         # The rest of the code simply extract the irreps present in this representation
-        Rs_out = []
+        rs_out = []
         A = Q.clone()
         for r in group.irrep_indices():
-            if group.irrep(r)(ide).shape[0] > d_sym - o3.dim(Rs_out):
+            if group.irrep(r)(ide).shape[0] > d_sym - sum(mul * group.irrep_dim(r) for mul, r in rs_out):
                 break
 
-            mul, B, representation = reduce(group, representation, group.irrep(r), eps)
+            mul, B, representation = has_rep_in_rep(group, representation, group.irrep(r), eps)
             A = direct_sum(torch.eye(d_sym - B.shape[0]), B) @ A
             A = _round_sqrt(A, eps)
 
-            if has_parity:
-                Rs_out += [(mul,) + r]
-            else:
-                Rs_out += [(mul, r)]
+            if mul > 0:
+                rs_out += [(mul, r)]
 
-            if o3.dim(Rs_out) == d_sym:
+            if sum(mul * group.irrep_dim(r) for mul, r in rs_out) == d_sym:
                 break
 
-        if o3.dim(Rs_out) != d_sym:
+        if sum(mul * group.irrep_dim(r) for mul, r in rs_out) != d_sym:
             raise RuntimeError(f'unable to decompose into irreducible representations')
 
-        return o3.simplify(Rs_out), A.to(dtype=dtype)
+        A = A.reshape(len(A), *[dims[i] for i in f0])
+        return rs_out, A.to(dtype=dtype)
 
 
 def _round_sqrt(x, eps):
