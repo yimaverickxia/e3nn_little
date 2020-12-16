@@ -23,11 +23,12 @@ class FC(torch.nn.Module):
     def forward(self, x):
         with torch.autograd.profiler.record_function(repr(self)):
             for i, W in enumerate(self.weights):
-                # first layer
-                if i == 0:
-                    x = x @ W
-                else:
-                    x = x @ (W / x.shape[1]**0.5)
+                if i > 0:  # not first layer
+                    W = W / x.shape[1]**0.5
+                if i == len(self.weights) - 1:  # last layer
+                    W = W / x.shape[1]**0.5
+
+                x = x @ W
 
                 # not last layer
                 if i < len(self.weights) - 1:
@@ -54,11 +55,12 @@ class FCrelu(torch.nn.Module):
     def forward(self, x):
         with torch.autograd.profiler.record_function(repr(self)):
             for i, W in enumerate(self.weights):
-                # first layer
-                if i == 0:
-                    x = x @ W
-                else:
-                    x = x @ W.mul(2**0.5 / x.shape[1]**0.5)
+                if i > 0:  # not first layer
+                    W = 2**0.5 * W / x.shape[1]**0.5
+                if i == len(self.weights) - 1:  # last layer
+                    W = W / x.shape[1]**0.5
+
+                x = x @ W
 
                 # not last layer
                 if i < len(self.weights) - 1:

@@ -1,7 +1,7 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring
 import pytest
 import torch
-from e3nn_little.nn.models import Network
+from e3nn_little.nn.models.qm9 import Network
 
 
 @pytest.mark.parametrize('dtype', [torch.float32, torch.float64])
