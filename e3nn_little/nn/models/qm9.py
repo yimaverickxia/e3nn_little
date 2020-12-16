@@ -1,5 +1,5 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except, abstract-method, arguments-differ
-from math import pi
+from math import pi, prod
 
 import torch
 from torch.nn import Embedding
@@ -30,7 +30,7 @@ qm9_target_dict = {
 class Network(torch.nn.Module):
     def __init__(self, muls=(128, 12, 0), ps=(1, -1), lmax=1,
                  num_layers=3, cutoff=10.0, rad_gaussians=50,
-                 rad_hs=(256, 256), num_neighbors=20,
+                 rad_hs=(512, 512), num_neighbors=20,
                  readout='add', dipole=False, mean=None, std=None, scale=None,
                  atomref=None):
         super().__init__()
@@ -47,14 +47,17 @@ class Network(torch.nn.Module):
         self.embedding = Embedding(100, muls[0])
         self.Rs_in = [(muls[0], 0, 1)]
 
-        self.radial = GaussianRadialModel(rad_gaussians, cutoff)
+        self.radial = torch.nn.Sequential(
+            GaussianRadialModel(rad_gaussians, cutoff),
+            FC((rad_gaussians, ) + rad_hs, swish, out_scale='component', out_act=True)
+        )
         self.Rs_sh = [(1, l, (-1)**l) for l in range(lmax + 1)]  # spherical harmonics representation
 
         Rs = self.Rs_in
         modules = []
         for _ in range(num_layers):
             act = make_gated_block(Rs, muls, ps, self.Rs_sh)
-            conv = Conv(Rs, act.Rs_in, self.Rs_sh, (rad_gaussians,) + rad_hs)
+            conv = Conv(Rs, act.Rs_in, self.Rs_sh, rad_hs[-1])
             Rs = o3.simplify(act.Rs_out)
 
             modules += [torch.nn.ModuleList([conv, act])]
@@ -62,7 +65,7 @@ class Network(torch.nn.Module):
         self.layers = torch.nn.ModuleList(modules)
 
         self.Rs_out = [(1, 0, p) for p in ps]
-        self.layers.append(Conv(Rs, self.Rs_out, self.Rs_sh, (rad_gaussians,) + rad_hs))
+        self.layers.append(Conv(Rs, self.Rs_out, self.Rs_sh, rad_hs[-1]))
 
         self.register_buffer('initial_atomref', atomref)
         self.atomref = None
@@ -142,7 +145,7 @@ def make_gated_block(Rs_in, muls, ps, Rs_sh):
 
 
 class Conv(MessagePassing):
-    def __init__(self, Rs_in, Rs_out, Rs_sh, rad_hs):
+    def __init__(self, Rs_in, Rs_out, Rs_sh, rad_features):
         super().__init__(aggr='add')
         self.Rs_in = o3.simplify(Rs_in)
         self.Rs_out = o3.simplify(Rs_out)
@@ -166,7 +169,10 @@ class Conv(MessagePassing):
                             Rs.append(r)
                         instr += [(i_1, i_2, i_out, 'uvu', True)]
         self.tp = CustomWeightedTensorProduct(self.Rs_in, self.Rs_sh, Rs, instr, own_weight=False, weight_batch=True)
-        self.nn = FC(rad_hs + (self.tp.weight_numel,), swish)
+        self.ws = torch.nn.ModuleList([
+            FC((rad_features, prod(shape)), in_scale='component', out_scale='zero')
+            for shape in self.tp.weight_shapes
+        ])
         self.lin2 = Linear(Rs, self.Rs_out)
 
     def forward(self, x, edge_index, edge_weight, edge_c, edge_sh, size=None):
@@ -174,14 +180,15 @@ class Conv(MessagePassing):
             # x = [num_atoms, dim(Rs_in)]
             s = self.si(x)
 
-            w = self.nn(edge_weight)  # [num_messages, weight]
-            w = w * edge_c[:, None]
-
             x = self.lin1(x)
-            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, w=w)
+            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_c=edge_c, edge_weight=edge_weight)
             x = self.lin2(x)
 
             return s + x
 
-    def message(self, x_j, sh, w):
-        return self.tp(x_j, sh, w)
+    def message(self, x_j, sh, edge_c, edge_weight):
+        ws = [
+            nn(edge_weight).mul(edge_c[:, None]).reshape(len(edge_c), *shape)
+            for shape, nn in zip(self.tp.weight_shapes, self.ws)
+        ]
+        return self.tp(x_j, sh, ws)

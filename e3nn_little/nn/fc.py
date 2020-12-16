@@ -4,8 +4,12 @@ import torch
 from e3nn_little.math import normalize2mom
 
 
+def _identity(x):
+    return x
+
+
 class FC(torch.nn.Module):
-    def __init__(self, hs, act, in_scale='norm', out_scale='zero', out_act=False):
+    def __init__(self, hs, act=_identity, in_scale='norm', out_scale='zero', out_act=False):
         super().__init__()
         assert isinstance(hs, tuple)
         self.hs = hs
