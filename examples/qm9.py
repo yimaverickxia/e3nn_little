@@ -54,8 +54,8 @@ def execute(args):
             prof.export_chrome_trace(f"{datetime.datetime.now()}.json")
             break
 
-    modules = [model.embedding] + list(model.layers) + [model.atomref]
-    lrs = [0.1] + [1] * len(model.layers) + [0.1]
+    modules = [model.embedding, model.radial] + list(model.layers) + [model.atomref]
+    lrs = [0.1, 1] + [1] * len(model.layers) + [0.1]
     param_groups = []
     for lr, module in zip(lrs, modules):
         jac = []
