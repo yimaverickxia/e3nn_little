@@ -9,7 +9,7 @@ from torch_scatter import scatter
 from e3nn_little import o3
 from e3nn_little.math import swish
 from e3nn_little.nn import (FC, CustomWeightedTensorProduct, GatedBlockParity,
-                            GaussianRadialModel, Linear)
+                            GaussianRadial, Linear)
 
 qm9_target_dict = {
     0: 'dipole_moment',
@@ -48,7 +48,7 @@ class Network(torch.nn.Module):
         self.Rs_in = [(muls[0], 0, 1)]
 
         self.radial = torch.nn.Sequential(
-            GaussianRadialModel(rad_gaussians, cutoff),
+            GaussianRadial(rad_gaussians, cutoff),
             FC((rad_gaussians, ) + rad_hs, swish, out_scale='component', out_act=True)
         )
         self.Rs_sh = [(1, l, (-1)**l) for l in range(lmax + 1)]  # spherical harmonics representation
