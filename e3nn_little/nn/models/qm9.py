@@ -187,8 +187,5 @@ class Conv(MessagePassing):
             return s + x
 
     def message(self, x_j, sh, edge_c, edge_weight):
-        ws = [
-            nn(edge_weight).mul(edge_c[:, None]).reshape(len(edge_c), *shape)
-            for shape, nn in zip(self.tp.weight_shapes, self.ws)
-        ]
+        ws = [nn(edge_weight) * edge_c[:, None] for nn in self.ws]
         return self.tp(x_j, sh, ws)
