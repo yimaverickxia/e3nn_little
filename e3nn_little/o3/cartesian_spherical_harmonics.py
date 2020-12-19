@@ -6,7 +6,6 @@ import torch
 from e3nn_little import o3
 
 
-
 @torch.jit.script
 def y0(x, _y, _z):
     return torch.ones(x.shape + (1,), dtype=x.dtype, device=x.device)
@@ -253,7 +252,7 @@ def y11(x, y, z):
 _ys = [y0, y1, y2, y3, y4, y5, y6, y7, y8, y9, y10, y11]
 
 
-def spherical_harmonics(Rs, pos, normalization='integral'):
+def spherical_harmonics(l, pos, normalization='integral'):
     """
     spherical harmonics
 
@@ -262,10 +261,10 @@ def spherical_harmonics(Rs, pos, normalization='integral'):
     :param normalization: integral (the integral over the sphere gives 1), norm (the norm is 1), component (each component is ~1)
     :return: tensor of shape [..., m]
     """
+    Rs = o3.IrList(l).simplify()
     assert normalization in ['integral', 'component', 'norm']
 
-    with torch.autograd.profiler.record_function(f'spherical_harmonics({o3.format_Rs(Rs)}, {tuple(pos.shape[:-1])})'):
-        Rs = o3.simplify(Rs)
+    with torch.autograd.profiler.record_function(f'spherical_harmonics({Rs}, {tuple(pos.shape[:-1])})'):
         *size, _ = pos.shape
         pos = pos.reshape(-1, 3)
         d = torch.norm(pos, 2, dim=1)
@@ -273,16 +272,16 @@ def spherical_harmonics(Rs, pos, normalization='integral'):
         pos = pos / d[d > 0, None]
 
         x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
-        sh = torch.cat([u for mul, l, p in Rs for u in mul * [_ys[l](x, y, z)]], dim=1)
+        sh = torch.cat([u for mul, (l, p) in Rs for u in mul * [_ys[l](x, y, z)]], dim=1)
 
         if len(d) > len(sh):
             out = sh.new_zeros(len(d), sh.shape[1])
-            out[d == 0] = torch.cat([u for mul, l, p in Rs for u in mul * [sh.new_ones(1) if l == 0 else sh.new_zeros(2 * l + 1)]])
+            out[d == 0] = torch.cat([u for mul, (l, p) in Rs for u in mul * [sh.new_ones(1) if l == 0 else sh.new_zeros(2 * l + 1)]])
             out[d > 0] = sh
             sh = out
 
         if normalization == 'integral':
             sh.div_(math.sqrt(4 * math.pi))
         if normalization == 'norm':
-            sh.div_(torch.cat([u for mul, l, p in Rs for u in mul * [math.sqrt(2 * l + 1) * sh.new_ones(2 * l + 1)]]))
+            sh.div_(torch.cat([u for mul, (l, p) in Rs for u in mul * [math.sqrt(2 * l + 1) * sh.new_ones(2 * l + 1)]]))
         return sh.reshape(*size, sh.shape[1])

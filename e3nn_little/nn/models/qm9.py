@@ -45,26 +45,26 @@ class Network(torch.nn.Module):
         self.num_neighbors = num_neighbors
 
         self.embedding = Embedding(100, muls[0])
-        self.Rs_in = [(muls[0], 0, 1)]
+        self.Rs_in = o3.IrList([(muls[0], 0, 1)])
 
         self.radial = torch.nn.Sequential(
             GaussianRadial(rad_gaussians, cutoff),
             FC((rad_gaussians, ) + rad_hs, swish, out_scale='component', out_act=True)
         )
-        self.Rs_sh = [(1, l, (-1)**l) for l in range(lmax + 1)]  # spherical harmonics representation
+        self.Rs_sh = o3.IrList([(1, l, (-1)**l) for l in range(lmax + 1)])  # spherical harmonics representation
 
         Rs = self.Rs_in
         modules = []
         for _ in range(num_layers):
             act = make_gated_block(Rs, muls, ps, self.Rs_sh)
             conv = Conv(Rs, act.Rs_in, self.Rs_sh, rad_hs[-1])
-            Rs = o3.simplify(act.Rs_out)
+            Rs = act.Rs_out.simplify()
 
             modules += [torch.nn.ModuleList([conv, act])]
 
         self.layers = torch.nn.ModuleList(modules)
 
-        self.Rs_out = [(1, 0, p) for p in ps]
+        self.Rs_out = o3.IrList([(1, 0, p) for p in ps])
         self.layers.append(Conv(Rs, self.Rs_out, self.Rs_sh, rad_hs[-1]))
 
         self.register_buffer('initial_atomref', atomref)
@@ -97,7 +97,7 @@ class Network(torch.nn.Module):
             h = self.layers[-1](h, edge_index, edge_weight, edge_c, edge_sh)
 
         s = 0
-        for i, (mul, l, p) in enumerate(self.Rs_out):
+        for i, (mul, (l, p)) in enumerate(self.Rs_out):
             assert mul == 1 and l == 0
             if p == 1:
                 s += h[:, i]
@@ -125,20 +125,20 @@ def make_gated_block(Rs_in, muls, ps, Rs_sh):
     """
     Rs_available = [
         (l, p_in * p_sh)
-        for _, l_in, p_in in o3.simplify(Rs_in)
-        for _, l_sh, p_sh in Rs_sh
+        for _, (l_in, p_in) in Rs_in.simplify()
+        for _, (l_sh, p_sh) in Rs_sh
         for l in range(abs(l_in - l_sh), l_in + l_sh + 1)
     ]
 
-    scalars = [(muls[0], 0, p) for p in ps if (0, p) in Rs_available]
-    act_scalars = [(mul, swish if p == 1 else torch.tanh) for mul, l, p in scalars]
+    scalars = o3.IrList([(muls[0], 0, p) for p in ps if (0, p) in Rs_available])
+    act_scalars = [(mul, swish if p == 1 else torch.tanh) for mul, (_, p) in scalars]
 
-    nonscalars = [(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in ps if (l, p*(-1)**l) in Rs_available]
+    nonscalars = o3.IrList([(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in ps if (l, p*(-1)**l) in Rs_available])
     if (0, +1) in Rs_available:
-        gates = [(o3.mul_dim(nonscalars), 0, +1)]
+        gates = o3.IrList([(nonscalars.mul_dim, 0, +1)])
         act_gates = [(-1, torch.sigmoid)]
     else:
-        gates = [(o3.mul_dim(nonscalars), 0, -1)]
+        gates = o3.IrList([(nonscalars.mul_dim, 0, -1)])
         act_gates = [(-1, torch.tanh)]
 
     return GatedBlockParity(scalars, act_scalars, gates, act_gates, nonscalars)
@@ -147,20 +147,20 @@ def make_gated_block(Rs_in, muls, ps, Rs_sh):
 class Conv(MessagePassing):
     def __init__(self, Rs_in, Rs_out, Rs_sh, rad_features):
         super().__init__(aggr='add')
-        self.Rs_in = o3.simplify(Rs_in)
-        self.Rs_out = o3.simplify(Rs_out)
-        self.Rs_sh = o3.simplify(Rs_sh)
+        self.Rs_in = Rs_in.simplify()
+        self.Rs_out = Rs_out.simplify()
+        self.Rs_sh = Rs_sh.simplify()
 
         self.si = Linear(self.Rs_in, self.Rs_out)
         self.lin1 = Linear(self.Rs_in, self.Rs_in)
 
         instr = []
         Rs = []
-        for i_1, (mul_1, l_1, p_1) in enumerate(self.Rs_in):
-            for i_2, (_, l_2, p_2) in enumerate(self.Rs_sh):
+        for i_1, (mul_1, (l_1, p_1)) in enumerate(self.Rs_in):
+            for i_2, (_, (l_2, p_2)) in enumerate(self.Rs_sh):
                 for l_out in range(abs(l_1 - l_2), l_1 + l_2 + 1):
                     p_out = p_1 * p_2
-                    if (l_out, p_out) in [(l, p) for _, l, p in self.Rs_out]:
+                    if (l_out, p_out) in [(l, p) for _, (l, p) in self.Rs_out]:
                         r = (mul_1, l_out, p_out)
                         if r in Rs:
                             i_out = Rs.index(r)
@@ -168,6 +168,7 @@ class Conv(MessagePassing):
                             i_out = len(Rs)
                             Rs.append(r)
                         instr += [(i_1, i_2, i_out, 'uvu', True)]
+        Rs = o3.IrList(Rs)
         self.tp = CustomWeightedTensorProduct(self.Rs_in, self.Rs_sh, Rs, instr, own_weight=False, weight_batch=True)
         self.ws = torch.nn.ModuleList([
             FC((rad_features, prod(shape)), in_scale='component', out_scale='zero')

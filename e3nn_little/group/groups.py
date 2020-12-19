@@ -44,7 +44,7 @@ class SO3(Group):
 
     def irrep(self, r):
         def f(g):
-            return o3.irrep(r, *g)
+            return o3.wigner_D(r, *g)
         return f
 
     def irrep_dim(self, r):
@@ -67,14 +67,14 @@ class SO3(Group):
 class O3(Group):
     def irrep_indices(self):
         for l in itertools.count():
-            yield (l, (-1)**l)
-            yield (l, -(-1)**l)
+            yield o3.IrRep(l, (-1)**l)
+            yield o3.IrRep(l, -(-1)**l)
 
     def irrep(self, r):
         l, p = r
         def f(g):
             *abc, k = g
-            return o3.irrep(l, *abc) * p**k
+            return o3.wigner_D(l, *abc) * p**k
         return f
 
     def irrep_dim(self, r):

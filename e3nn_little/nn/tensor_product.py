@@ -8,9 +8,9 @@ from e3nn_little.util import eval_code
 
 
 def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own_weight=True, weight_batch=False):
-    Rs_in1 = o3.simplify(Rs_in1)
-    Rs_in2 = o3.simplify(Rs_in2)
-    Rs_out = o3.simplify(Rs_out)
+    Rs_in1 = Rs_in1.simplify()
+    Rs_in2 = Rs_in2.simplify()
+    Rs_out = Rs_out.simplify()
 
     instr = [
         (i_1, i_2, i_out, 'uvw', True)
@@ -23,10 +23,6 @@ def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own
 
 
 def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normalization='component', own_weight=True, weight_batch=False):
-    Rs_in1 = o3.convention(Rs_in1)
-    Rs_in2 = o3.convention(Rs_in2)
-    Rs_out = o3.convention(Rs_out)
-
     groups = min(groups, min(mul for mul, _, _ in Rs_in1), min(mul for mul, _, _ in Rs_out))
 
     Rs_in1 = [(mul // groups + (g < mul % groups), l, p) for mul, l, p in Rs_in1 for g in range(groups)]
@@ -44,28 +40,31 @@ def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normal
 
 
 def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
-    Rs_in1 = o3.simplify(Rs_in1)
-    Rs_in2 = o3.simplify(Rs_in2)
+    Rs_in1 = Rs_in1.simplify()
+    Rs_in2 = Rs_in2.simplify()
 
-    assert sum(mul for mul, _, _ in Rs_in1) == sum(mul for mul, _, _ in Rs_in2)
+    assert Rs_in1.mul_dim == Rs_in2.mul_dim
+
+    Rs_in1 = list(Rs_in1)
+    Rs_in2 = list(Rs_in2)
 
     i = 0
     while i < len(Rs_in1):
-        mul_1, l_1, p_1 = Rs_in1[i]
-        mul_2, l_2, p_2 = Rs_in2[i]
+        mul_1, (l_1, p_1) = Rs_in1[i]
+        mul_2, (l_2, p_2) = Rs_in2[i]
 
         if mul_1 < mul_2:
-            Rs_in2[i] = (mul_1, l_2, p_2)
-            Rs_in2.insert(i + 1, (mul_2 - mul_1, l_2, p_2))
+            Rs_in2[i] = (mul_1, (l_2, p_2))
+            Rs_in2.insert(i + 1, (mul_2 - mul_1, (l_2, p_2)))
 
         if mul_2 < mul_1:
-            Rs_in1[i] = (mul_2, l_1, p_1)
-            Rs_in1.insert(i + 1, (mul_1 - mul_2, l_1, p_1))
+            Rs_in1[i] = (mul_2, (l_1, p_1))
+            Rs_in1.insert(i + 1, (mul_1 - mul_2, (l_1, p_1)))
         i += 1
 
     Rs_out = []
     instr = []
-    for i, ((mul, l_1, p_1), (mul_2, l_2, p_2)) in enumerate(zip(Rs_in1, Rs_in2)):
+    for i, ((mul, (l_1, p_1)), (mul_2, (l_2, p_2))) in enumerate(zip(Rs_in1, Rs_in2)):
         assert mul == mul_2
         for l in list(range(abs(l_1 - l_2), l_1 + l_2 + 1)):
             i_out = len(Rs_out)
@@ -81,8 +80,8 @@ class Identity(torch.nn.Module):
     def __init__(self, Rs_in, Rs_out):
         super().__init__()
 
-        self.Rs_in = o3.simplify(Rs_in)
-        self.Rs_out = o3.simplify(Rs_out)
+        self.Rs_in = Rs_in.simplify()
+        self.Rs_out = Rs_out.simplify()
 
         assert self.Rs_in == self.Rs_out
 
@@ -93,7 +92,7 @@ class Identity(torch.nn.Module):
         self.register_buffer('output_mask', output_mask)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({o3.format_Rs(self.Rs_in)} -> {o3.format_Rs(self.Rs_out)})"
+        return f"{self.__class__.__name__}({self.Rs_in} -> {self.Rs_out})"
 
     def forward(self, features):
         """
@@ -107,27 +106,27 @@ class Linear(torch.nn.Module):
     def __init__(self, Rs_in, Rs_out, normalization: str = 'component'):
         super().__init__()
 
-        self.Rs_in = o3.simplify(Rs_in)
-        self.Rs_out = o3.simplify(Rs_out)
+        self.Rs_in = Rs_in.simplify()
+        self.Rs_out = Rs_out.simplify()
 
         instr = [
             (i_in, 0, i_out, 'uvw', True)
-            for i_in, (_, l_in, p_in) in enumerate(self.Rs_in)
-            for i_out, (_, l_out, p_out) in enumerate(self.Rs_out)
+            for i_in, (_, (l_in, p_in)) in enumerate(self.Rs_in)
+            for i_out, (_, (l_out, p_out)) in enumerate(self.Rs_out)
             if l_in == l_out and p_in == p_out
         ]
         self.tp = CustomWeightedTensorProduct(self.Rs_in, [(1, 0, 1)], self.Rs_out, instr, normalization, own_weight=True)
 
         output_mask = torch.cat([
             torch.ones(mul * (2 * l + 1))
-            if any(l_in == l and p_in == p for _, l_in, p_in in self.Rs_in)
+            if any(l_in == l and p_in == p for _, (l_in, p_in) in self.Rs_in)
             else torch.zeros(mul * (2 * l + 1))
-            for mul, l, p in self.Rs_out
+            for mul, (l, p) in self.Rs_out
         ])
         self.register_buffer('output_mask', output_mask)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({o3.format_Rs(self.Rs_in)} -> {o3.format_Rs(self.Rs_out)} {self.tp.weight_numel} weights)"
+        return f"{self.__class__.__name__}({self.Rs_in} -> {self.Rs_out} {self.tp.weight_numel} weights)"
 
     def forward(self, features):
         """
@@ -163,10 +162,9 @@ class CustomWeightedTensorProduct(torch.nn.Module):
         super().__init__()
 
         assert normalization in ['component', 'norm'], normalization
-
-        self.Rs_in1 = o3.convention(Rs_in1)
-        self.Rs_in2 = o3.convention(Rs_in2)
-        self.Rs_out = o3.convention(Rs_out)
+        self.Rs_in1 = o3.IrList(Rs_in1)
+        self.Rs_in2 = o3.IrList(Rs_in2)
+        self.Rs_out = o3.IrList(Rs_out)
 
         self.weight_batch = weight_batch
         z = 'z' if self.weight_batch else ''
@@ -179,24 +177,24 @@ import torch
 @torch.jit.script
 def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[torch.Tensor]) -> torch.Tensor:
     batch = x1.shape[0]
-    out = x1.new_zeros((batch, {o3.dim(self.Rs_out)}))
+    out = x1.new_zeros((batch, {self.Rs_out.dim}))
     ein = torch.einsum
 """
 
         wshapes = []
         wigners = []
-        count = [0 for _ in range(o3.dim(self.Rs_out))]
+        count = [0 for _ in range(self.Rs_out.dim)]
 
         instr = sorted(instr)  # for optimization
 
-        for i_1, (mul_1, l_1, p_1) in enumerate(self.Rs_in1):
-            index_1 = o3.dim(self.Rs_in1[:i_1])
+        for i_1, (mul_1, (l_1, p_1)) in enumerate(self.Rs_in1):
+            index_1 = self.Rs_in1[:i_1].dim
             dim_1 = mul_1 * (2 * l_1 + 1)
             code += f"    x1_{i_1} = x1[:, {index_1}:{index_1+dim_1}].reshape(batch, {mul_1}, {2 * l_1 + 1})\n"
         code += f"\n"
 
-        for i_2, (mul_2, l_2, p_2) in enumerate(self.Rs_in2):
-            index_2 = o3.dim(self.Rs_in2[:i_2])
+        for i_2, (mul_2, (l_2, p_2)) in enumerate(self.Rs_in2):
+            index_2 = self.Rs_in2[:i_2].dim
             dim_2 = mul_2 * (2 * l_2 + 1)
             code += f"    x2_{i_2} = x2[:, {index_2}:{index_2+dim_2}].reshape(batch, {mul_2}, {2 * l_2 + 1})\n"
         code += f"\n"
@@ -204,15 +202,15 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
         last_ss = None
 
         for i_1, i_2, i_out, mode, weight in instr:
-            mul_1, l_1, p_1 = self.Rs_in1[i_1]
-            mul_2, l_2, p_2 = self.Rs_in2[i_2]
-            mul_out, l_out, p_out = self.Rs_out[i_out]
+            mul_1, (l_1, p_1) = self.Rs_in1[i_1]
+            mul_2, (l_2, p_2) = self.Rs_in2[i_2]
+            mul_out, (l_out, p_out) = self.Rs_out[i_out]
             dim_1 = mul_1 * (2 * l_1 + 1)
             dim_2 = mul_2 * (2 * l_2 + 1)
             dim_out = mul_out * (2 * l_out + 1)
-            index_1 = o3.dim(self.Rs_in1[:i_1])
-            index_2 = o3.dim(self.Rs_in2[:i_2])
-            index_out = o3.dim(self.Rs_out[:i_out])
+            index_1 = self.Rs_in1[:i_1].dim
+            index_2 = self.Rs_in2[:i_2].dim
+            index_out = self.Rs_out[:i_out].dim
 
             assert p_1 * p_2 == p_out
             assert abs(l_1 - l_2) <= l_out <= l_1 + l_2
@@ -222,8 +220,8 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
             code += (
                 f"    with torch.autograd.profiler.record_function("
-                f"'{o3.format_Rs([self.Rs_in1[i_1]])} x {o3.format_Rs([self.Rs_in2[i_2]])} "
-                f"= {o3.format_Rs([self.Rs_out[i_out]])} {mode} {weight}'):\n"
+                f"'{self.Rs_in1[i_1:i_1+1]} x {self.Rs_in2[i_2:i_2+1]} "
+                f"= {self.Rs_out[i_out:i_out+1]} {mode} {weight}'):\n"
             )
             code += f"        s1 = x1_{i_1}\n"
             code += f"        s2 = x2_{i_2}\n"
@@ -478,9 +476,9 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
             assert not self.weight_batch, "weight_batch and own_weight are incompatible"
             self.weight = torch.nn.ParameterDict()
             for i, (i_1, i_2, i_out, mode, shape) in enumerate(weight_infos):
-                mul_1, l_1, p_1 = self.Rs_in1[i_1]
-                mul_2, l_2, p_2 = self.Rs_in2[i_2]
-                mul_out, l_out, p_out = self.Rs_out[i_out]
+                mul_1, (l_1, p_1) = self.Rs_in1[i_1]
+                mul_2, (l_2, p_2) = self.Rs_in2[i_2]
+                mul_out, (l_out, p_out) = self.Rs_out[i_out]
                 self.weight[f'{i} l1={l_1} l2={l_2} lout={l_out}'] = torch.nn.Parameter(torch.randn(shape))
 
         self.to(dtype=torch.get_default_dtype())
@@ -488,9 +486,9 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
     def __repr__(self):
         return "{name}({Rs_in1} x {Rs_in2} -> {Rs_out} {nw} weights)".format(
             name=self.__class__.__name__,
-            Rs_in1=o3.format_Rs(o3.simplify(self.Rs_in1)),
-            Rs_in2=o3.format_Rs(o3.simplify(self.Rs_in2)),
-            Rs_out=o3.format_Rs(o3.simplify(self.Rs_out)),
+            Rs_in1=self.Rs_in1.simplify(),
+            Rs_in2=self.Rs_in2.simplify(),
+            Rs_out=self.Rs_out.simplify(),
             nw=self.weight_numel,
         )
 
@@ -501,10 +499,10 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
         with torch.autograd.profiler.record_function(repr(self)):
             *size, n = features_1.size()
             features_1 = features_1.reshape(-1, n)
-            assert n == o3.dim(self.Rs_in1), f"{n} is not {o3.dim(self.Rs_in1)}"
+            assert n == self.Rs_in1.dim, f"{n} is not {self.Rs_in1.dim}"
             *size2, n = features_2.size()
             features_2 = features_2.reshape(-1, n)
-            assert n == o3.dim(self.Rs_in2), f"{n} is not {o3.dim(self.Rs_in2)}"
+            assert n == self.Rs_in2.dim, f"{n} is not {self.Rs_in2.dim}"
             assert size == size2
 
             if self.weight_numel:
@@ -532,7 +530,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
             wigners = [getattr(self, f"C{i}") for i in range(len(self.wigners))]
 
             if features_1.shape[0] == 0:
-                return torch.zeros(*size, o3.dim(self.Rs_out))
+                return torch.zeros(*size, self.Rs_out.dim)
 
             features = self.main(features_1, features_2, weight, wigners)
 

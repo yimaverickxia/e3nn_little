@@ -27,7 +27,7 @@ def _z_rot_mat(angle, l):
     return M
 
 
-def irrep(l, alpha, beta, gamma):
+def wigner_D(l, alpha, beta, gamma):
     J = _Jd[l].to(dtype=torch.get_default_dtype())
     Xa = _z_rot_mat(alpha, l)
     Xb = _z_rot_mat(beta, l)
@@ -35,16 +35,12 @@ def irrep(l, alpha, beta, gamma):
     return Xa @ J @ Xb @ J @ Xc
 
 
-def rep(Rs, alpha, beta, gamma, parity=None):
+def rep(Rs, alpha, beta, gamma, parity=0):
     """
     Representation of O(3). Parity applied (-1)**parity times.
     """
-    Rs = o3.simplify(Rs)
-    if parity is None:
-        return direct_sum(*[irrep(l, alpha, beta, gamma) for mul, l, _ in Rs for _ in range(mul)])
-    else:
-        assert all(parity != 0 for _, _, parity in Rs)
-        return direct_sum(*[(p ** parity) * irrep(l, alpha, beta, gamma) for mul, l, p in Rs for _ in range(mul)])
+    Rs = o3.IrList(Rs).simplify()
+    return direct_sum(*[(p ** parity) * wigner_D(l, alpha, beta, gamma) for mul, (l, p) in Rs for _ in range(mul)])
 
 
 def wigner_3j(l1, l2, l3):

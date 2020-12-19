@@ -14,9 +14,9 @@ class Activation(torch.nn.Module):
         '''
         super().__init__()
 
-        Rs = o3.simplify(Rs)
+        Rs = Rs.simplify()
 
-        n1 = sum(mul for mul, _, _ in Rs)
+        n1 = sum(mul for mul, _ in Rs)
         n2 = sum(mul for mul, _ in acts if mul > 0)
 
         # normalize the second moment
@@ -29,9 +29,10 @@ class Activation(torch.nn.Module):
 
         assert n1 == sum(mul for mul, _ in acts)
 
+        Rs = list(Rs)
         i = 0
         while i < len(Rs):
-            mul_r, l, p_r = Rs[i]
+            mul_r, (l, p_r) = Rs[i]
             mul_a, act = acts[i]
 
             if mul_r < mul_a:
@@ -39,14 +40,14 @@ class Activation(torch.nn.Module):
                 acts.insert(i + 1, (mul_a - mul_r, act))
 
             if mul_a < mul_r:
-                Rs[i] = (mul_a, l, p_r)
-                Rs.insert(i + 1, (mul_r - mul_a, l, p_r))
+                Rs[i] = (mul_a, (l, p_r))
+                Rs.insert(i + 1, (mul_r - mul_a, (l, p_r)))
             i += 1
 
         x = torch.linspace(0, 10, 256)
 
         Rs_out = []
-        for (mul, l, p_in), (mul_a, act) in zip(Rs, acts):
+        for (mul, (l, p_in)), (mul_a, act) in zip(Rs, acts):
             assert mul == mul_a
 
             a1, a2 = act(x), act(-x)
@@ -58,12 +59,12 @@ class Activation(torch.nn.Module):
                 p_act = 0
 
             p = p_act if p_in == -1 else p_in
-            Rs_out.append((mul, 0, p))
+            Rs_out.append((mul, (0, p)))
 
             if p_in != 0 and p == 0:
                 raise ValueError("warning! the parity is violated")
 
-        self.Rs_out = o3.simplify(Rs_out)
+        self.Rs_out = o3.IrList(Rs_out).simplify()
         self.acts = acts
 
     def forward(self, features, dim=-1):
@@ -88,19 +89,19 @@ class Activation(torch.nn.Module):
 class Sortcut(torch.nn.Module):
     def __init__(self, *Rs_outs):
         super().__init__()
-        self.Rs_outs = tuple(o3.simplify(Rs) for Rs in Rs_outs)
-        def key(rs):
-            _mul, l, p = rs
+        self.Rs_outs = tuple(Rs.simplify() for Rs in Rs_outs)
+        def key(mul_ir):
+            _mul, (l, p) = mul_ir
             return (l, p)
-        self.Rs_in = o3.simplify(sorted((x for Rs in self.Rs_outs for x in Rs), key=key))
+        self.Rs_in = o3.IrList(sorted((x for Rs in self.Rs_outs for x in Rs), key=key)).simplify()
 
     def forward(self, x):
-        outs = tuple(x.new_zeros(x.shape[:-1] + (o3.dim(Rs),)) for Rs in self.Rs_outs)
+        outs = tuple(x.new_zeros(x.shape[:-1] + (Rs.dim,)) for Rs in self.Rs_outs)
         i_in = 0
-        for _, l_in, p_in in self.Rs_in:
+        for _, (l_in, p_in) in self.Rs_in:
             for Rs_out, out in zip(self.Rs_outs, outs):
                 i_out = 0
-                for mul_out, l_out, p_out in Rs_out:
+                for mul_out, (l_out, p_out) in Rs_out:
                     d = mul_out * (2 * l_out + 1)
                     if (l_in, p_in) == (l_out, p_out):
                         out[..., i_out:i_out + d] = x[..., i_in:i_in + d]
@@ -115,7 +116,7 @@ class GatedBlockParity(torch.nn.Module):
 
         self.sc = Sortcut(Rs_scalars, Rs_gates)
         self.Rs_scalars, self.Rs_gates = self.sc.Rs_outs
-        self.Rs_nonscalars = o3.simplify(Rs_nonscalars)
+        self.Rs_nonscalars = Rs_nonscalars.simplify()
         self.Rs_in = self.sc.Rs_in + self.Rs_nonscalars
 
         self.act_scalars = Activation(Rs_scalars, act_scalars)
@@ -130,13 +131,7 @@ class GatedBlockParity(torch.nn.Module):
         self.Rs_out = Rs_scalars + Rs_nonscalars
 
     def __repr__(self):
-        return "{name} ({Rs_scalars} + {Rs_gates} + {Rs_nonscalars} -> {Rs_out})".format(
-            name=self.__class__.__name__,
-            Rs_scalars=o3.format_Rs(self.Rs_scalars),
-            Rs_gates=o3.format_Rs(self.Rs_gates),
-            Rs_nonscalars=o3.format_Rs(self.Rs_nonscalars),
-            Rs_out=o3.format_Rs(self.Rs_out),
-        )
+        return f"{self.__class__.__name__} ({self.Rs_scalars} + {self.Rs_gates} + {self.Rs_nonscalars} -> {self.Rs_out})"
 
     def forward(self, features):
         """

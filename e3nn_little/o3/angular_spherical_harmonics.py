@@ -21,10 +21,11 @@ def spherical_harmonics_alpha_z_y(Rs, alpha, z, y):
     """
     spherical harmonics
     """
-    Rs = o3.simplify(Rs)
-    sha = spherical_harmonics_alpha(o3.lmax(Rs), alpha.flatten())  # [z, m]
+    #TODO test Rs=[0, 1, 1]
+    Rs = o3.IrList(Rs).simplify()
+    sha = spherical_harmonics_alpha(Rs.lmax, alpha.flatten())  # [z, m]
     shz = spherical_harmonics_z(Rs, z.flatten(), y.flatten())  # [z, l * m]
-    out = mul_m_lm(Rs, sha, shz)
+    out = mul_m_lm([(mul, l) for mul, (l, _) in Rs], sha, shz)
     return out.reshape(alpha.shape + (shz.shape[1],))
 
 
@@ -62,10 +63,8 @@ def spherical_harmonics_z(Rs, z, y=None):
     :param z: tensor of shape [...]
     :return: tensor of shape [..., l * m]
     """
-    Rs = o3.simplify(Rs)
-    for _, l, p in Rs:
-        assert p in [0, (-1)**l]
-    ls = [l for mul, l, _ in Rs]
+    Rs = Rs.simplify()
+    ls = [l for mul, (l, _) in Rs]
     return legendre(ls, z, y)  # [..., l * m]
 
 
@@ -144,14 +143,14 @@ def _sympy_legendre(l, m):
 
 
 @torch.jit.script
-def mul_m_lm(Rs: List[Tuple[int, int, int]], x_m: torch.Tensor, x_lm: torch.Tensor) -> torch.Tensor:  # pragma: no cover
+def mul_m_lm(mul_l: List[Tuple[int, int]], x_m: torch.Tensor, x_lm: torch.Tensor) -> torch.Tensor:  # pragma: no cover
     """
     multiply tensor [..., l * m] by [..., m]
     """
     l_max = x_m.shape[-1] // 2
     out = []
     i = 0
-    for mul, l, _ in Rs:
+    for mul, l in mul_l:
         d = mul * (2 * l + 1)
         x1 = x_lm[..., i: i + d]  # [..., mul * m]
         x1 = x1.reshape(x1.shape[:-1] + (mul, 2 * l + 1))  # [..., mul, m]
