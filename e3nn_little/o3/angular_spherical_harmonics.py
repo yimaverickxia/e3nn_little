@@ -10,22 +10,27 @@ from e3nn_little.util import eval_code
 from e3nn_little import o3
 
 
-def spherical_harmonics_alpha_beta(Rs, alpha, beta):
+def spherical_harmonics_alpha_beta(l, alpha, beta):
     """
     spherical harmonics
     """
-    return spherical_harmonics_alpha_z_y(Rs, alpha, beta.cos(), beta.sin())
+    return spherical_harmonics_alpha_z_y(l, alpha, beta.cos(), beta.sin())
 
 
-def spherical_harmonics_alpha_z_y(Rs, alpha, z, y):
+def spherical_harmonics_alpha_z_y(l, alpha, z, y):
     """
     spherical harmonics
     """
-    #TODO test Rs=[0, 1, 1]
-    Rs = o3.IrList(Rs).simplify()
-    sha = spherical_harmonics_alpha(Rs.lmax, alpha.flatten())  # [z, m]
-    shz = spherical_harmonics_z(Rs, z.flatten(), y.flatten())  # [z, l * m]
-    out = mul_m_lm([(mul, l) for mul, (l, _) in Rs], sha, shz)
+    if isinstance(l, o3.Irreps):
+        ls = [l for mul, (l, p) in l for _ in range(mul)]
+    elif isinstance(l, int):
+        ls = [l]
+    else:
+        ls = list(l)
+
+    sha = spherical_harmonics_alpha(max(ls), alpha.flatten())  # [z, m]
+    shz = spherical_harmonics_z(ls, z.flatten(), y.flatten())  # [z, l * m]
+    out = mul_m_lm([(1, l) for l in ls], sha, shz)
     return out.reshape(alpha.shape + (shz.shape[1],))
 
 
@@ -55,7 +60,7 @@ def spherical_harmonics_alpha(l: int, alpha: torch.Tensor) -> torch.Tensor:  # p
     return out  # [..., m]
 
 
-def spherical_harmonics_z(Rs, z, y=None):
+def spherical_harmonics_z(ls, z, y=None):
     """
     the z component of the spherical harmonics
     (useful to perform fourier transform)
@@ -63,8 +68,6 @@ def spherical_harmonics_z(Rs, z, y=None):
     :param z: tensor of shape [...]
     :return: tensor of shape [..., l * m]
     """
-    Rs = Rs.simplify()
-    ls = [l for mul, (l, _) in Rs]
     return legendre(ls, z, y)  # [..., l * m]
 
 

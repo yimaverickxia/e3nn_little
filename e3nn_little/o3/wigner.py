@@ -2,8 +2,6 @@
 import os
 
 import torch
-from e3nn_little import o3
-from e3nn_little.math import direct_sum
 
 _Jd, _W3j = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
 
@@ -33,14 +31,6 @@ def wigner_D(l, alpha, beta, gamma):
     Xb = _z_rot_mat(beta, l)
     Xc = _z_rot_mat(gamma, l)
     return Xa @ J @ Xb @ J @ Xc
-
-
-def rep(Rs, alpha, beta, gamma, parity=0):
-    """
-    Representation of O(3). Parity applied (-1)**parity times.
-    """
-    Rs = o3.IrList(Rs).simplify()
-    return direct_sum(*[(p ** parity) * wigner_D(l, alpha, beta, gamma) for mul, (l, p) in Rs for _ in range(mul)])
 
 
 def wigner_3j(l1, l2, l3):

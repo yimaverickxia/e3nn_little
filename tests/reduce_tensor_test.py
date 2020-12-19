@@ -7,8 +7,8 @@ from e3nn_little import o3
 def test_reduce_tensor_Levi_Civita_symbol():
     torch.set_default_dtype(torch.float64)
 
-    Rs, Q = o3.reduce_tensor('ijk=-ikj=-jik', i=[(1, 1)])
-    assert Rs == ((1, o3.e0),)
+    irreps, Q = o3.reduce_tensor('ijk=-ikj=-jik', i='1e')
+    assert irreps == ((1, (0, 1)),)
     r = o3.rand_angles()
     D = o3.wigner_D(1, *r)
     Q = Q.reshape(3, 3, 3)
@@ -19,8 +19,8 @@ def test_reduce_tensor_Levi_Civita_symbol():
 def test_reduce_tensor_antisymmetric_L2():
     torch.set_default_dtype(torch.float64)
 
-    Rs, Q = o3.reduce_tensor('ijk=-ikj=-jik', i=[(1, 2)])
-    assert Rs[0] == (1, o3.e1)
+    irreps, Q = o3.reduce_tensor('ijk=-ikj=-jik', i='2e')
+    assert irreps[0] == (1, (1, 1))
     q = Q[:3].reshape(3, 5, 5, 5)
 
     r = o3.rand_angles()
@@ -36,29 +36,30 @@ def test_reduce_tensor_antisymmetric_L2():
 
 
 def test_reduce_tensor_elasticity_tensor():
-    Rs, _Q = o3.reduce_tensor('ijkl=jikl=klij', i=[(1, 1)])
-    assert Rs.dim == 21
+    irreps, _Q = o3.reduce_tensor('ijkl=jikl=klij', i='1e')
+    assert irreps.dim == 21
 
 
 def test_reduce_tensor_elasticity_tensor_parity():
-    Rs, _Q = o3.reduce_tensor('ijkl=jikl=klij', i=[(1, 1, -1)])
-    assert all(p == 1 for _, (_, p) in Rs)
-    assert Rs.dim == 21
+    irreps, _Q = o3.reduce_tensor('ijkl=jikl=klij', i='1o')
+    assert all(p == 1 for _, (_, p) in irreps)
+    assert irreps.dim == 21
 
 
 def test_reduce_tensor_rot():
-    Rs, _Q = o3.reduce_tensor('ijkl=jikl=klij', i=o3.rot, has_parity=False)
-    assert Rs.dim == 21
+    irreps, _Q = o3.reduce_tensor('ijkl=jikl=klij', i=o3.rot, has_parity=False)
+    assert irreps.dim == 21
 
 
 def test_reduce_tensor_equivariance():
     torch.set_default_dtype(torch.float64)
 
-    Rs, Q = o3.reduce_tensor('ijkl=jikl=klij', i=1)
+    ir = o3.Irreps('1e')
+    irreps, Q = o3.reduce_tensor('ijkl=jikl=klij', i=ir)
 
     abc = o3.rand_angles()
-    R = o3.rep(1, *abc)
-    D = o3.rep(Rs, *abc)
+    R = ir.D(*abc)
+    D = irreps.D(*abc)
 
     q1 = torch.einsum('qmnop,mi,nj,ok,pl->qijkl', Q, R, R, R, R)
     q2 = torch.einsum('qa,aijkl->qijkl', D, Q)

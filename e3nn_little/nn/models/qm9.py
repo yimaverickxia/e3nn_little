@@ -8,8 +8,8 @@ from torch_scatter import scatter
 
 from e3nn_little import o3
 from e3nn_little.math import swish
-from e3nn_little.nn import (FC, CustomWeightedTensorProduct, GatedBlockParity,
-                            GaussianRadial, Linear)
+from e3nn_little.nn import (FC, CustomWeightedTensorProduct, Gate,
+                            GaussianBasis, Linear)
 
 qm9_target_dict = {
     0: 'dipole_moment',
@@ -45,27 +45,27 @@ class Network(torch.nn.Module):
         self.num_neighbors = num_neighbors
 
         self.embedding = Embedding(100, muls[0])
-        self.Rs_in = o3.IrList([(muls[0], 0, 1)])
+        self.irreps_in = o3.Irreps([(muls[0], 0, 1)])
 
         self.radial = torch.nn.Sequential(
-            GaussianRadial(rad_gaussians, cutoff),
+            GaussianBasis(rad_gaussians, cutoff),
             FC((rad_gaussians, ) + rad_hs, swish, out_scale='component', out_act=True)
         )
-        self.Rs_sh = o3.IrList([(1, l, (-1)**l) for l in range(lmax + 1)])  # spherical harmonics representation
+        self.irreps_sh = o3.Irreps([(1, l, (-1)**l) for l in range(lmax + 1)])  # spherical harmonics representation
 
-        Rs = self.Rs_in
+        irreps = self.irreps_in
         modules = []
         for _ in range(num_layers):
-            act = make_gated_block(Rs, muls, ps, self.Rs_sh)
-            conv = Conv(Rs, act.Rs_in, self.Rs_sh, rad_hs[-1])
-            Rs = act.Rs_out.simplify()
+            act = make_gated_block(irreps, muls, ps, self.irreps_sh)
+            conv = Conv(irreps, act.irreps_in, self.irreps_sh, rad_hs[-1])
+            irreps = act.irreps_out.simplify()
 
             modules += [torch.nn.ModuleList([conv, act])]
 
         self.layers = torch.nn.ModuleList(modules)
 
-        self.Rs_out = o3.IrList([(1, 0, p) for p in ps])
-        self.layers.append(Conv(Rs, self.Rs_out, self.Rs_sh, rad_hs[-1]))
+        self.irreps_out = o3.Irreps([(1, 0, p) for p in ps])
+        self.layers.append(Conv(irreps, self.irreps_out, self.irreps_sh, rad_hs[-1]))
 
         self.register_buffer('initial_atomref', atomref)
         self.atomref = None
@@ -83,7 +83,7 @@ class Network(torch.nn.Module):
         edge_index = radius_graph(pos, r=self.cutoff, batch=batch, max_num_neighbors=1000)
         row, col = edge_index
         edge_vec = pos[row] - pos[col]
-        edge_sh = o3.spherical_harmonics(self.Rs_sh, edge_vec, 'component') / self.num_neighbors**0.5
+        edge_sh = o3.spherical_harmonics(self.irreps_sh, edge_vec, 'component') / self.num_neighbors**0.5
         edge_len = edge_vec.norm(dim=1)
         edge_weight = self.radial(edge_len)
         edge_c = (pi * edge_len / self.cutoff).cos().add(1).div(2)
@@ -97,7 +97,7 @@ class Network(torch.nn.Module):
             h = self.layers[-1](h, edge_index, edge_weight, edge_c, edge_sh)
 
         s = 0
-        for i, (mul, (l, p)) in enumerate(self.Rs_out):
+        for i, (mul, (l, p)) in enumerate(self.irreps_out):
             assert mul == 1 and l == 0
             if p == 1:
                 s += h[:, i]
@@ -119,69 +119,69 @@ class Network(torch.nn.Module):
         return out
 
 
-def make_gated_block(Rs_in, muls, ps, Rs_sh):
+def make_gated_block(irreps_in, muls, ps, irreps_sh):
     """
-    Make a `GatedBlockParity` assuming many things
+    Make a Gate assuming many things
     """
-    Rs_available = [
+    irreps_available = [
         (l, p_in * p_sh)
-        for _, (l_in, p_in) in Rs_in.simplify()
-        for _, (l_sh, p_sh) in Rs_sh
+        for _, (l_in, p_in) in irreps_in.simplify()
+        for _, (l_sh, p_sh) in irreps_sh
         for l in range(abs(l_in - l_sh), l_in + l_sh + 1)
     ]
 
-    scalars = o3.IrList([(muls[0], 0, p) for p in ps if (0, p) in Rs_available])
+    scalars = o3.Irreps([(muls[0], 0, p) for p in ps if (0, p) in irreps_available])
     act_scalars = [(mul, swish if p == 1 else torch.tanh) for mul, (_, p) in scalars]
 
-    nonscalars = o3.IrList([(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in ps if (l, p*(-1)**l) in Rs_available])
-    if (0, +1) in Rs_available:
-        gates = o3.IrList([(nonscalars.mul_dim, 0, +1)])
+    nonscalars = o3.Irreps([(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in ps if (l, p*(-1)**l) in irreps_available])
+    if (0, +1) in irreps_available:
+        gates = o3.Irreps([(nonscalars.num_irreps, 0, +1)])
         act_gates = [(-1, torch.sigmoid)]
     else:
-        gates = o3.IrList([(nonscalars.mul_dim, 0, -1)])
+        gates = o3.Irreps([(nonscalars.num_irreps, 0, -1)])
         act_gates = [(-1, torch.tanh)]
 
-    return GatedBlockParity(scalars, act_scalars, gates, act_gates, nonscalars)
+    return Gate(scalars, act_scalars, gates, act_gates, nonscalars)
 
 
 class Conv(MessagePassing):
-    def __init__(self, Rs_in, Rs_out, Rs_sh, rad_features):
+    def __init__(self, irreps_in, irreps_out, irreps_sh, rad_features):
         super().__init__(aggr='add')
-        self.Rs_in = Rs_in.simplify()
-        self.Rs_out = Rs_out.simplify()
-        self.Rs_sh = Rs_sh.simplify()
+        self.irreps_in = irreps_in.simplify()
+        self.irreps_out = irreps_out.simplify()
+        self.irreps_sh = irreps_sh.simplify()
 
-        self.si = Linear(self.Rs_in, self.Rs_out)
-        self.lin1 = Linear(self.Rs_in, self.Rs_in)
+        self.si = Linear(self.irreps_in, self.irreps_out)
+        self.lin1 = Linear(self.irreps_in, self.irreps_in)
 
         instr = []
-        Rs = []
-        for i_1, (mul_1, (l_1, p_1)) in enumerate(self.Rs_in):
-            for i_2, (_, (l_2, p_2)) in enumerate(self.Rs_sh):
+        irreps = []
+        for i_1, (mul_1, (l_1, p_1)) in enumerate(self.irreps_in):
+            for i_2, (_, (l_2, p_2)) in enumerate(self.irreps_sh):
                 for l_out in range(abs(l_1 - l_2), l_1 + l_2 + 1):
                     p_out = p_1 * p_2
-                    if (l_out, p_out) in [(l, p) for _, (l, p) in self.Rs_out]:
+                    if (l_out, p_out) in [(l, p) for _, (l, p) in self.irreps_out]:
                         r = (mul_1, l_out, p_out)
-                        if r in Rs:
-                            i_out = Rs.index(r)
+                        if r in irreps:
+                            i_out = irreps.index(r)
                         else:
-                            i_out = len(Rs)
-                            Rs.append(r)
+                            i_out = len(irreps)
+                            irreps.append(r)
                         instr += [(i_1, i_2, i_out, 'uvu', True, 1.0)]
-        Rs = o3.IrList(Rs)
-        in1 = [(mul, ir, 1.0) for mul, ir in self.Rs_in]
-        in2 = [(mul, ir, 1.0) for mul, ir in self.Rs_sh]
-        out = [(mul, ir, 1.0) for mul, ir in Rs]
-        self.tp = CustomWeightedTensorProduct(in1, in2, out, instr, own_weight=False, weight_batch=True)
+        irreps = o3.Irreps(irreps)
+        in1 = [(mul, ir, 1.0) for mul, ir in self.irreps_in]
+        in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
+        out = [(mul, ir, 1.0) for mul, ir in irreps]
+        self.tp = CustomWeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
         self.ws = torch.nn.ModuleList([
             FC((rad_features, prod(shape)), in_scale='component', out_scale='zero')
             for shape in self.tp.weight_shapes
         ])
-        self.lin2 = Linear(Rs, self.Rs_out)
+        self.lin2 = Linear(irreps, self.irreps_out)
 
     def forward(self, x, edge_index, edge_weight, edge_c, edge_sh, size=None):
         with torch.autograd.profiler.record_function("Conv"):
-            # x = [num_atoms, dim(Rs_in)]
+            # x = [num_atoms, dim(irreps_in)]
             s = self.si(x)
 
             x = self.lin1(x)

@@ -2,7 +2,7 @@
 import torch
 
 
-class GaussianRadial(torch.nn.Module):
+class GaussianBasis(torch.nn.Module):
     def __init__(self, number_of_basis, max_radius, min_radius=0.):
         '''
         :param out_dim: output dimension

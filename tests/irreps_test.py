@@ -1,0 +1,34 @@
+import pytest
+
+from e3nn_little import o3
+
+
+def test_creation():
+    o3.Irrep(3, 1)
+    ir = o3.Irrep("3e")
+    o3.Irrep(ir)
+
+    irreps = o3.Irreps(ir)
+    o3.Irreps(irreps)
+    o3.Irreps([(32, (4, -1))])
+    o3.Irreps("11e")
+    o3.Irreps("16x1e + 32 x 2o")
+    o3.Irreps(["1e", '2o'])
+    o3.Irreps([(16, "3e"), '1e'])
+    o3.Irreps([(16, "3e"), '1e', (256, 1, -1)])
+
+
+def test_slice():
+    irreps = o3.Irreps("16x1e + 3e + 2e + 5o")
+    assert isinstance(irreps[2:], o3.Irreps)
+
+
+def test_cat():
+    irreps = o3.Irreps("4x1e + 6x2e + 12x2o") + o3.Irreps("1x1e + 2x2e + 12x2o")
+    assert len(irreps) == 6
+    assert irreps.num_irreps == 4 + 6 + 12 + 1 + 2 + 12
+
+
+@pytest.mark.xfail()
+def test_fail1():
+    o3.Irreps([(32, 1)])

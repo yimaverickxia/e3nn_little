@@ -6,7 +6,7 @@ from e3nn_little.math import normalize2mom
 
 
 class Activation(torch.nn.Module):
-    def __init__(self, Rs, acts):
+    def __init__(self, irreps, acts):
         '''
         Can be used only with scalar fields
 
@@ -14,9 +14,9 @@ class Activation(torch.nn.Module):
         '''
         super().__init__()
 
-        Rs = Rs.simplify()
+        irreps = irreps.simplify()
 
-        n1 = sum(mul for mul, _ in Rs)
+        n1 = sum(mul for mul, _ in irreps)
         n2 = sum(mul for mul, _ in acts if mul > 0)
 
         # normalize the second moment
@@ -29,10 +29,10 @@ class Activation(torch.nn.Module):
 
         assert n1 == sum(mul for mul, _ in acts)
 
-        Rs = list(Rs)
+        irreps = list(irreps)
         i = 0
-        while i < len(Rs):
-            mul_r, (l, p_r) = Rs[i]
+        while i < len(irreps):
+            mul_r, (l, p_r) = irreps[i]
             mul_a, act = acts[i]
 
             if mul_r < mul_a:
@@ -40,14 +40,14 @@ class Activation(torch.nn.Module):
                 acts.insert(i + 1, (mul_a - mul_r, act))
 
             if mul_a < mul_r:
-                Rs[i] = (mul_a, (l, p_r))
-                Rs.insert(i + 1, (mul_r - mul_a, (l, p_r)))
+                irreps[i] = (mul_a, (l, p_r))
+                irreps.insert(i + 1, (mul_r - mul_a, (l, p_r)))
             i += 1
 
         x = torch.linspace(0, 10, 256)
 
-        Rs_out = []
-        for (mul, (l, p_in)), (mul_a, act) in zip(Rs, acts):
+        irreps_out = []
+        for (mul, (l, p_in)), (mul_a, act) in zip(irreps, acts):
             assert mul == mul_a
 
             a1, a2 = act(x), act(-x)
@@ -59,12 +59,12 @@ class Activation(torch.nn.Module):
                 p_act = 0
 
             p = p_act if p_in == -1 else p_in
-            Rs_out.append((mul, (0, p)))
+            irreps_out.append((mul, (0, p)))
 
             if p_in != 0 and p == 0:
                 raise ValueError("warning! the parity is violated")
 
-        self.Rs_out = o3.IrList(Rs_out).simplify()
+        self.irreps_out = o3.Irreps(irreps_out).simplify()
         self.acts = acts
 
     def forward(self, features, dim=-1):
@@ -87,21 +87,21 @@ class Activation(torch.nn.Module):
 
 
 class Sortcut(torch.nn.Module):
-    def __init__(self, *Rs_outs):
+    def __init__(self, *irreps_outs):
         super().__init__()
-        self.Rs_outs = tuple(Rs.simplify() for Rs in Rs_outs)
+        self.irreps_outs = tuple(irreps.simplify() for irreps in irreps_outs)
         def key(mul_ir):
             _mul, (l, p) = mul_ir
             return (l, p)
-        self.Rs_in = o3.IrList(sorted((x for Rs in self.Rs_outs for x in Rs), key=key)).simplify()
+        self.irreps_in = o3.Irreps(sorted((x for irreps in self.irreps_outs for x in irreps), key=key)).simplify()
 
     def forward(self, x):
-        outs = tuple(x.new_zeros(x.shape[:-1] + (Rs.dim,)) for Rs in self.Rs_outs)
+        outs = tuple(x.new_zeros(x.shape[:-1] + (irreps.dim,)) for irreps in self.irreps_outs)
         i_in = 0
-        for _, (l_in, p_in) in self.Rs_in:
-            for Rs_out, out in zip(self.Rs_outs, outs):
+        for _, (l_in, p_in) in self.irreps_in:
+            for irreps_out, out in zip(self.irreps_outs, outs):
                 i_out = 0
-                for mul_out, (l_out, p_out) in Rs_out:
+                for mul_out, (l_out, p_out) in irreps_out:
                     d = mul_out * (2 * l_out + 1)
                     if (l_in, p_in) == (l_out, p_out):
                         out[..., i_out:i_out + d] = x[..., i_in:i_in + d]
@@ -110,32 +110,32 @@ class Sortcut(torch.nn.Module):
         return outs
 
 
-class GatedBlockParity(torch.nn.Module):
-    def __init__(self, Rs_scalars, act_scalars, Rs_gates, act_gates, Rs_nonscalars):
+class Gate(torch.nn.Module):
+    def __init__(self, irreps_scalars, act_scalars, irreps_gates, act_gates, irreps_nonscalars):
         super().__init__()
 
-        self.sc = Sortcut(Rs_scalars, Rs_gates)
-        self.Rs_scalars, self.Rs_gates = self.sc.Rs_outs
-        self.Rs_nonscalars = Rs_nonscalars.simplify()
-        self.Rs_in = self.sc.Rs_in + self.Rs_nonscalars
+        self.sc = Sortcut(irreps_scalars, irreps_gates)
+        self.irreps_scalars, self.irreps_gates = self.sc.irreps_outs
+        self.irreps_nonscalars = irreps_nonscalars.simplify()
+        self.irreps_in = self.sc.irreps_in + self.irreps_nonscalars
 
-        self.act_scalars = Activation(Rs_scalars, act_scalars)
-        Rs_scalars = self.act_scalars.Rs_out
+        self.act_scalars = Activation(irreps_scalars, act_scalars)
+        irreps_scalars = self.act_scalars.irreps_out
 
-        self.act_gates = Activation(Rs_gates, act_gates)
-        Rs_gates = self.act_gates.Rs_out
+        self.act_gates = Activation(irreps_gates, act_gates)
+        irreps_gates = self.act_gates.irreps_out
 
-        self.mul = nn.ElementwiseTensorProduct(Rs_nonscalars, Rs_gates)
-        Rs_nonscalars = self.mul.Rs_out
+        self.mul = nn.ElementwiseTensorProduct(irreps_nonscalars, irreps_gates)
+        irreps_nonscalars = self.mul.irreps_out
 
-        self.Rs_out = Rs_scalars + Rs_nonscalars
+        self.irreps_out = irreps_scalars + irreps_nonscalars
 
     def __repr__(self):
-        return f"{self.__class__.__name__} ({self.Rs_scalars} + {self.Rs_gates} + {self.Rs_nonscalars} -> {self.Rs_out})"
+        return f"{self.__class__.__name__} ({self.irreps_scalars} + {self.irreps_gates} + {self.irreps_nonscalars} -> {self.irreps_out})"
 
     def forward(self, features):
         """
-        input of shape [..., dim(self.Rs_in)]
+        input of shape [..., dim(self.irreps_in)]
         """
         with torch.autograd.profiler.record_function(repr(self)):
             scalars, gates = self.sc(features)

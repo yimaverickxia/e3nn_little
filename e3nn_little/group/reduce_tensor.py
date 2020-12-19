@@ -11,8 +11,8 @@ from e3nn_little.util import torch_default_dtype
 def reduce_tensor(group: Group, formula, eps=1e-9, **kw_representations):
     """reduce a tensor with symmetries into irreducible representations
     Usage
-    Rs, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=rep)
-    Rs = [(mul1, r1), (mul2, r2), ...]
+    irreps, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=rep)
+    irreps = [(mul1, r1), (mul2, r2), ...]
     Q = tensor of shape [15, 3, 3, 3, 3]
     """
     dtype = torch.get_default_dtype()
@@ -115,27 +115,27 @@ def reduce_tensor(group: Group, formula, eps=1e-9, **kw_representations):
         assert is_representation(group, representation, eps)
 
         # The rest of the code simply extract the irreps present in this representation
-        rs_out = []
+        irreps = []
         A = Q.clone()
-        for r in group.irrep_indices():
-            if group.irrep(r)(ide).shape[0] > d_sym - sum(mul * group.irrep_dim(r) for mul, r in rs_out):
+        for ir in group.irrep_indices():
+            if group.irrep(ir)(ide).shape[0] > d_sym - sum(mul * group.irrep_dim(ir) for mul, ir in irreps):
                 break
 
-            mul, B, representation = has_rep_in_rep(group, representation, group.irrep(r), eps)
+            mul, B, representation = has_rep_in_rep(group, representation, group.irrep(ir), eps)
             A = direct_sum(torch.eye(d_sym - B.shape[0]), B) @ A
             A = _round_sqrt(A, eps)
 
             if mul > 0:
-                rs_out += [(mul, r)]
+                irreps += [(mul, ir)]
 
-            if sum(mul * group.irrep_dim(r) for mul, r in rs_out) == d_sym:
+            if sum(mul * group.irrep_dim(ir) for mul, ir in irreps) == d_sym:
                 break
 
-        if sum(mul * group.irrep_dim(r) for mul, r in rs_out) != d_sym:
+        if sum(mul * group.irrep_dim(ir) for mul, ir in irreps) != d_sym:
             raise RuntimeError(f'unable to decompose into irreducible representations')
 
         A = A.reshape(len(A), *[dims[i] for i in f0])
-        return rs_out, A.to(dtype=dtype)
+        return irreps, A.to(dtype=dtype)
 
 
 def _round_sqrt(x, eps):

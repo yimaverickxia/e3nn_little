@@ -67,8 +67,8 @@ class SO3(Group):
 class O3(Group):
     def irrep_indices(self):
         for l in itertools.count():
-            yield o3.IrRep(l, (-1)**l)
-            yield o3.IrRep(l, -(-1)**l)
+            yield o3.Irrep(l, (-1)**l)
+            yield o3.Irrep(l, -(-1)**l)
 
     def irrep(self, r):
         l, p = r

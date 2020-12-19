@@ -2,30 +2,28 @@
 from e3nn_little import group, o3
 
 
-def reduce_tensor(formula, eps=1e-9, has_parity=True, **kw_Rs):
+def reduce_tensor(formula, eps=1e-9, has_parity=True, **kw_irreps):
     """reduce a tensor with symmetries into irreducible representations
     Usage
-    Rs, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=[(1, 1)])
-    Rs = 0,2,4
+    irreps, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=[(1, 1)])
+    irreps = 0,2,4
     Q = tensor of shape [15, 3, 3, 3, 3]
     """
     gr = group.O3() if has_parity else group.SO3()
 
     kw_representations = {}
 
-    def rep(Rs):
-        def re(g):
-            return o3.rep(Rs, *g)
-        return re
-
-    for i in kw_Rs:
-        if callable(kw_Rs[i]):
-            kw_representations[i] = lambda g: kw_Rs[i](*g)
+    for i in kw_irreps:
+        if callable(kw_irreps[i]):
+            kw_representations[i] = lambda g: kw_irreps[i](*g)
         else:
-            kw_representations[i] = rep(kw_Rs[i])
+            kw_representations[i] = lambda g: o3.Irreps(kw_irreps[i]).D(*g)
 
-    rs_out, Q = group.reduce_tensor(gr, formula, eps, **kw_representations)
+    irreps, Q = group.reduce_tensor(gr, formula, eps, **kw_representations)
 
-    Rs = o3.IrList(rs_out)
+    if has_parity:
+        irreps = o3.Irreps(irreps)
+    else:
+        irreps = o3.Irreps([(mul, l, 1) for mul, l in irreps])
 
-    return Rs, Q
+    return irreps, Q

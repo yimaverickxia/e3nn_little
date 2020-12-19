@@ -39,16 +39,16 @@ def test_sh_equivariance2():
     - spherical_harmonics
     """
     torch.set_default_dtype(torch.float64)
-    Rs = o3.IrList([0, 1, 2, 3, 4, 5, 6])
+    irreps = o3.Irreps("0e + 1o + 2e + 3o + 4e")
 
     abc = o3.rand_angles()
     R = o3.rot(*abc)
-    D = o3.rep(Rs, *abc)
+    D = irreps.D(*abc)
 
     x = torch.randn(10, 3)
 
-    y1 = o3.spherical_harmonics(Rs, x @ R.T)
-    y2 = o3.spherical_harmonics(Rs, x) @ D.T
+    y1 = o3.spherical_harmonics(irreps, x @ R.T)
+    y2 = o3.spherical_harmonics(irreps, x) @ D.T
 
     assert (y1 - y2).abs().max() < 1e-10
 
@@ -62,10 +62,10 @@ def test_sh_is_in_irrep():
         assert (Y - D[:, l]).abs().max() < 1e-10
 
 
-def test_rsh_backwardable():
+def test_backwardable():
     torch.set_default_dtype(torch.float64)
     lmax = 3
-    Rs = [(1, l) for l in range(lmax + 1)]
+    ls = list(range(lmax + 1))
 
     xyz = torch.tensor([
         [0., 0., 1.],
@@ -73,7 +73,7 @@ def test_rsh_backwardable():
         [0.0, 10.0, 0],
         [0.435, 0.7644, 0.023],
     ], requires_grad=True, dtype=torch.float64)
-    assert torch.autograd.gradcheck(partial(o3.spherical_harmonics, Rs), (xyz,), check_undefined_grad=False)
+    assert torch.autograd.gradcheck(partial(o3.spherical_harmonics, ls), (xyz,), check_undefined_grad=False)
 
 
 def test_sh_normalization():

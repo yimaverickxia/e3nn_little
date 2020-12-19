@@ -252,36 +252,42 @@ def y11(x, y, z):  # pragma: no cover
 _ys = [y0, y1, y2, y3, y4, y5, y6, y7, y8, y9, y10, y11]
 
 
-def spherical_harmonics(l, pos, normalization='integral'):
+def spherical_harmonics(l, xyz, normalization='integral'):
     """
     spherical harmonics
 
-    :param Rs: list of L's
-    :param pos: tensor of shape [..., 3]
+    :param irreps: list of L's
+    :param xyz: tensor of shape [..., 3]
     :param normalization: integral (the integral over the sphere gives 1), norm (the norm is 1), component (each component is ~1)
     :return: tensor of shape [..., m]
     """
-    Rs = o3.IrList(l).simplify()
+    if isinstance(l, o3.Irreps):
+        ls = [l for mul, (l, p) in l for _ in range(mul)]
+    elif isinstance(l, int):
+        ls = [l]
+    else:
+        ls = list(l)
+
     assert normalization in ['integral', 'component', 'norm']
 
-    with torch.autograd.profiler.record_function(f'spherical_harmonics({Rs}, {tuple(pos.shape[:-1])})'):
-        *size, _ = pos.shape
-        pos = pos.reshape(-1, 3)
-        d = torch.norm(pos, 2, dim=1)
-        pos = pos[d > 0]
-        pos = pos / d[d > 0, None]
+    with torch.autograd.profiler.record_function(f'spherical_harmonics({ls}, {tuple(xyz.shape[:-1])})'):
+        *size, _ = xyz.shape
+        xyz = xyz.reshape(-1, 3)
+        d = torch.norm(xyz, 2, dim=1)
+        xyz = xyz[d > 0]
+        xyz = xyz / d[d > 0, None]
 
-        x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
-        sh = torch.cat([u for mul, (l, p) in Rs for u in mul * [_ys[l](x, y, z)]], dim=1)
+        x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+        sh = torch.cat([_ys[l](x, y, z) for l in ls], dim=1)
 
         if len(d) > len(sh):
             out = sh.new_zeros(len(d), sh.shape[1])
-            out[d == 0] = torch.cat([u for mul, (l, p) in Rs for u in mul * [sh.new_ones(1) if l == 0 else sh.new_zeros(2 * l + 1)]])
+            out[d == 0] = torch.cat([sh.new_ones(1) if l == 0 else sh.new_zeros(2 * l + 1) for l in ls])
             out[d > 0] = sh
             sh = out
 
         if normalization == 'integral':
             sh.div_(math.sqrt(4 * math.pi))
         if normalization == 'norm':
-            sh.div_(torch.cat([u for mul, (l, p) in Rs for u in mul * [math.sqrt(2 * l + 1) * sh.new_ones(2 * l + 1)]]))
+            sh.div_(torch.cat([math.sqrt(2 * l + 1) * sh.new_ones(2 * l + 1) for l in ls]))
         return sh.reshape(*size, sh.shape[1])
