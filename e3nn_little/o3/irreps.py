@@ -1,8 +1,6 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import operator
 
-from numpy.lib.arraysetops import isin
-
 from e3nn_little import o3
 from e3nn_little.math import direct_sum
 
