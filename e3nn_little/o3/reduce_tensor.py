@@ -1,6 +1,5 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 from e3nn_little import group, o3
-from e3nn_little import math
 
 
 def reduce_tensor(formula, eps=1e-9, has_parity=True, **kw_Rs):
