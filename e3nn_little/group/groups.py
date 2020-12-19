@@ -7,7 +7,7 @@ import torch
 from e3nn_little import o3, perm
 
 
-class Group(ABC):
+class Group(ABC):  # pragma: no cover
     @abstractmethod
     def irrep_indices(self):
         while False:
@@ -140,3 +140,7 @@ def is_representation(group: Group, D, eps):
         if (D12 - D1D2).abs().max().item() > eps * D12.abs().max().item():
             return False
     return True
+
+
+#TODO implement is_group and add tests
+#TODO Group + LieGroup?

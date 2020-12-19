@@ -6,6 +6,12 @@ import torch
 from e3nn_little import o3
 
 
+def test_all_sh():
+    ls = list(range(11 + 1))
+    pos = torch.randn(4, 3)
+    o3.spherical_harmonics(ls, pos)
+
+
 def test_sh_equivariance1():
     """test
     - compose

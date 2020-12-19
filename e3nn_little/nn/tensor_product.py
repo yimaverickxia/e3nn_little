@@ -14,25 +14,25 @@ def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own
 
     instr = [
         (i_1, i_2, i_out, 'uvw', True)
-        for i_1, (_, l_1, p_1) in enumerate(Rs_in1)
-        for i_2, (_, l_2, p_2) in enumerate(Rs_in2)
-        for i_out, (_, l_out, p_out) in enumerate(Rs_out)
+        for i_1, (_, (l_1, p_1)) in enumerate(Rs_in1)
+        for i_2, (_, (l_2, p_2)) in enumerate(Rs_in2)
+        for i_out, (_, (l_out, p_out)) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
     ]
     return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight, weight_batch)
 
 
 def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normalization='component', own_weight=True, weight_batch=False):
-    groups = min(groups, min(mul for mul, _, _ in Rs_in1), min(mul for mul, _, _ in Rs_out))
+    groups = min(groups, min(mul for mul, _ in Rs_in1), min(mul for mul, _ in Rs_out))
 
-    Rs_in1 = [(mul // groups + (g < mul % groups), l, p) for mul, l, p in Rs_in1 for g in range(groups)]
-    Rs_out = [(mul // groups + (g < mul % groups), l, p) for mul, l, p in Rs_out for g in range(groups)]
+    Rs_in1 = [(mul // groups + (g < mul % groups), (l, p)) for mul, (l, p) in Rs_in1 for g in range(groups)]
+    Rs_out = [(mul // groups + (g < mul % groups), (l, p)) for mul, (l, p) in Rs_out for g in range(groups)]
 
     instr = [
         (i_1, i_2, i_out, 'uvw', True)
-        for i_1, (_, l_1, p_1) in enumerate(Rs_in1)
-        for i_2, (_, l_2, p_2) in enumerate(Rs_in2)
-        for i_out, (_, l_out, p_out) in enumerate(Rs_out)
+        for i_1, (_, (l_1, p_1)) in enumerate(Rs_in1)
+        for i_2, (_, (l_2, p_2)) in enumerate(Rs_in2)
+        for i_out, (_, (l_out, p_out)) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
         if i_1 % groups == i_out % groups
     ]
@@ -87,7 +87,7 @@ class Identity(torch.nn.Module):
 
         output_mask = torch.cat([
             torch.ones(mul * (2 * l + 1))
-            for mul, l, p in self.Rs_out
+            for mul, (l, _p) in self.Rs_out
         ])
         self.register_buffer('output_mask', output_mask)
 

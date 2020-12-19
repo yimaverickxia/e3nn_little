@@ -90,19 +90,16 @@ def angles_to_xyz(alpha, beta):
     return torch.stack([x, y, z], dim=-1)
 
 
-def xyz_to_angles(x, y=None, z=None):
+def xyz_to_angles(pos):
     """
     Convert point (x, y, z) on the sphere into (alpha, beta)
     """
-    if y is not None and z is not None:
-        x = torch.stack([x, y, z], dim=-1)
+    pos = torch.nn.functional.normalize(pos, p=2, dim=-1)  # forward 0's instead of nan for zero-radius
+    pos.masked_fill_(pos < -1., -1.)                       # mitigate numerical inaccuracies from normalization
+    pos.masked_fill_(pos > 1., 1.)
 
-    x = torch.nn.functional.normalize(x, p=2, dim=-1)  # forward 0's instead of nan for zero-radius
-    x.masked_fill_(x < -1., -1.)                       # mitigate numerical inaccuracies from normalization
-    x.masked_fill_(x > 1., 1.)
-
-    beta = torch.acos(x[..., 2])
-    alpha = torch.atan2(x[..., 1], x[..., 0])
+    beta = torch.acos(pos[..., 2])
+    alpha = torch.atan2(pos[..., 1], pos[..., 0])
     return alpha, beta
 
 
