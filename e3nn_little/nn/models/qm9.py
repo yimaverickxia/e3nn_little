@@ -167,9 +167,12 @@ class Conv(MessagePassing):
                         else:
                             i_out = len(Rs)
                             Rs.append(r)
-                        instr += [(i_1, i_2, i_out, 'uvu', True)]
+                        instr += [(i_1, i_2, i_out, 'uvu', True, 1.0)]
         Rs = o3.IrList(Rs)
-        self.tp = CustomWeightedTensorProduct(self.Rs_in, self.Rs_sh, Rs, instr, own_weight=False, weight_batch=True)
+        in1 = [(mul, ir, 1.0) for mul, ir in self.Rs_in]
+        in2 = [(mul, ir, 1.0) for mul, ir in self.Rs_sh]
+        out = [(mul, ir, 1.0) for mul, ir in Rs]
+        self.tp = CustomWeightedTensorProduct(in1, in2, out, instr, own_weight=False, weight_batch=True)
         self.ws = torch.nn.ModuleList([
             FC((rad_features, prod(shape)), in_scale='component', out_scale='zero')
             for shape in self.tp.weight_shapes

@@ -12,14 +12,18 @@ def WeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, normalization='component', own
     Rs_in2 = Rs_in2.simplify()
     Rs_out = Rs_out.simplify()
 
+    in1 = [(mul, ir, 1.0) for mul, ir in Rs_in1]
+    in2 = [(mul, ir, 1.0) for mul, ir in Rs_in2]
+    out = [(mul, ir, 1.0) for mul, ir in Rs_out]
+
     instr = [
-        (i_1, i_2, i_out, 'uvw', True)
+        (i_1, i_2, i_out, 'uvw', True, 1.0)
         for i_1, (_, (l_1, p_1)) in enumerate(Rs_in1)
         for i_2, (_, (l_2, p_2)) in enumerate(Rs_in2)
         for i_out, (_, (l_out, p_out)) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
     ]
-    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight, weight_batch)
+    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, own_weight, weight_batch)
 
 
 def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normalization='component', own_weight=True, weight_batch=False):
@@ -28,15 +32,19 @@ def GroupedWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, groups=math.inf, normal
     Rs_in1 = [(mul // groups + (g < mul % groups), (l, p)) for mul, (l, p) in Rs_in1 for g in range(groups)]
     Rs_out = [(mul // groups + (g < mul % groups), (l, p)) for mul, (l, p) in Rs_out for g in range(groups)]
 
+    in1 = [(mul, ir, 1.0) for mul, ir in Rs_in1]
+    in2 = [(mul, ir, 1.0) for mul, ir in Rs_in2]
+    out = [(mul, ir, 1.0) for mul, ir in Rs_out]
+
     instr = [
-        (i_1, i_2, i_out, 'uvw', True)
+        (i_1, i_2, i_out, 'uvw', True, 1.0)
         for i_1, (_, (l_1, p_1)) in enumerate(Rs_in1)
         for i_2, (_, (l_2, p_2)) in enumerate(Rs_in2)
         for i_out, (_, (l_out, p_out)) in enumerate(Rs_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
         if i_1 % groups == i_out % groups
     ]
-    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight, weight_batch)
+    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, own_weight, weight_batch)
 
 
 def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
@@ -68,12 +76,16 @@ def ElementwiseTensorProduct(Rs_in1, Rs_in2, normalization='component'):
         assert mul == mul_2
         for l in list(range(abs(l_1 - l_2), l_1 + l_2 + 1)):
             i_out = len(Rs_out)
-            Rs_out.append((mul, l, p_1 * p_2))
+            Rs_out.append((mul, (l, p_1 * p_2)))
             instr += [
-                (i, i, i_out, 'uuu', False)
+                (i, i, i_out, 'uuu', False, 1.0)
             ]
 
-    return CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr, normalization, own_weight=False)
+    in1 = [(mul, ir, 1.0) for mul, ir in Rs_in1]
+    in2 = [(mul, ir, 1.0) for mul, ir in Rs_in2]
+    out = [(mul, ir, 1.0) for mul, ir in Rs_out]
+
+    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, own_weight=False)
 
 
 class Identity(torch.nn.Module):
@@ -110,12 +122,14 @@ class Linear(torch.nn.Module):
         self.Rs_out = Rs_out.simplify()
 
         instr = [
-            (i_in, 0, i_out, 'uvw', True)
+            (i_in, 0, i_out, 'uvw', True, 1.0)
             for i_in, (_, (l_in, p_in)) in enumerate(self.Rs_in)
             for i_out, (_, (l_out, p_out)) in enumerate(self.Rs_out)
             if l_in == l_out and p_in == p_out
         ]
-        self.tp = CustomWeightedTensorProduct(self.Rs_in, [(1, 0, 1)], self.Rs_out, instr, normalization, own_weight=True)
+        in1 = [(mul, ir, 1.0) for mul, ir in self.Rs_in]
+        out = [(mul, ir, 1.0) for mul, ir in self.Rs_out]
+        self.tp = CustomWeightedTensorProduct(in1, [(1, (0, 1), 1.0)], out, instr, normalization, own_weight=True)
 
         output_mask = torch.cat([
             torch.ones(mul * (2 * l + 1))
@@ -140,31 +154,43 @@ class Linear(torch.nn.Module):
 class CustomWeightedTensorProduct(torch.nn.Module):
     def __init__(
             self,
-            Rs_in1,
-            Rs_in2,
-            Rs_out,
-            instr: List[Tuple[int, int, int, str, bool]],
+            in1: List[Tuple[int, Tuple[int, int], float]],
+            in2: List[Tuple[int, Tuple[int, int], float]],
+            out: List[Tuple[int, Tuple[int, int], float]],
+            instr: List[Tuple[int, int, int, str, bool, float]],
             normalization: str = 'component',
             own_weight: bool = True,
             weight_batch: bool = False,
             _specialized_code=True,
         ):
-        """
-        Create a Tensor Product operation that has each of his path weighted by a parameter.
-        `instr` is a list of instructions.
-        An instruction if of the form (i_1, i_2, i_out, mode, weight)
-        it means "Put `Rs_in1[i_1] otimes Rs_in2[i_2] into Rs_out[i_out]"
-        `mode` determines the way the multiplicities are treated.
-        `weight` determines if weights are learned.
-        The default mode should be 'uvw', meaning that all paths are created.
+        """Tensor Product with parametrizable paths
+
+        Parameters
+        ----------
+        in1
+            List of inputs (multiplicity, (l, p), variance).
+        in2
+            List of inputs (multiplicity, (l, p), variance).
+        out
+            List of outputs (multiplicity, (l, p), variance).
+        instr
+            List of instructions (i_1, i_2, i_out, mode, train, path_weight)
+            it means: Put `in1[i_1]` otimes `in2[i_2]` into `out[i_out]`
+            - mode: determines the way the multiplicities are treated, "uvw" is fully connected
+            - train: is this path trained?
+            - path weight: how much this path should contribute to the output
         """
 
         super().__init__()
 
         assert normalization in ['component', 'norm'], normalization
-        self.Rs_in1 = o3.IrList(Rs_in1)
-        self.Rs_in2 = o3.IrList(Rs_in2)
-        self.Rs_out = o3.IrList(Rs_out)
+        self.Rs_in1 = o3.IrList([(mul, (l, p)) for mul, (l, p), _var in in1])
+        self.Rs_in2 = o3.IrList([(mul, (l, p)) for mul, (l, p), _var in in2])
+        self.Rs_out = o3.IrList([(mul, (l, p)) for mul, (l, p), _var in out])
+
+        in1_var = [var for _, _, var in in1]
+        in2_var = [var for _, _, var in in2]
+        out_var = [var for _, _, var in out]
 
         self.weight_batch = weight_batch
         z = 'z' if self.weight_batch else ''
@@ -183,9 +209,6 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
         wshapes = []
         wigners = []
-        count = [0 for _ in range(self.Rs_out.dim)]
-
-        instr = sorted(instr)  # for optimization
 
         for i_1, (mul_1, (l_1, p_1)) in enumerate(self.Rs_in1):
             index_1 = self.Rs_in1[:i_1].dim
@@ -201,7 +224,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
         last_ss = None
 
-        for i_1, i_2, i_out, mode, weight in instr:
+        for i_1, i_2, i_out, mode, weight, path_weight in instr:
             mul_1, (l_1, p_1) = self.Rs_in1[i_1]
             mul_2, (l_2, p_2) = self.Rs_in2[i_2]
             mul_out, (l_out, p_out) = self.Rs_out[i_out]
@@ -218,6 +241,9 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
             if dim_1 == 0 or dim_2 == 0 or dim_out == 0:
                 continue
 
+            # TODO test variance
+            alpha = out_var[i_out] / sum(path_weight_ * in1_var[i_1_] * in2_var[i_2_] for i_1_, i_2_, i_out_, _, _, path_weight_ in instr if i_out_ == i_out)
+
             code += (
                 f"    with torch.autograd.profiler.record_function("
                 f"'{self.Rs_in1[i_1:i_1+1]} x {self.Rs_in2[i_2:i_2+1]} "
@@ -227,6 +253,26 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
             code += f"        s2 = x2_{i_2}\n"
 
             assert mode in ['uvw', 'uvu', 'uvv', 'uuw', 'uuu', 'uvuv']
+
+            c = math.sqrt(alpha * path_weight / {
+                'uvw': (mul_1 * mul_2),
+                'uvu': mul_2,
+                'uvv': mul_1,
+                'uuw': mul_1,
+                'uuu': 1,
+                'uvuv': 1,
+            }[mode])
+
+            index_w = len(wshapes)
+            if weight:
+                wshapes.append({
+                    'uvw': (mul_1, mul_2, mul_out),
+                    'uvu': (mul_1, mul_2),
+                    'uvv': (mul_1, mul_2),
+                    'uuw': (mul_1, mul_out),
+                    'uuu': (mul_1,),
+                    'uvuv': (mul_1, mul_2),
+                }[mode])
 
             if _specialized_code:
                 # optimized code for special cases:
@@ -241,21 +287,9 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s2 = s2.reshape(batch, {mul_2})\n"
 
                     if mode == 'uvw':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,zu,zv->zw', ws[{len(wshapes)}], s1, s2)\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2, mul_out)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_1 * mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zu,zv->zw', ws[{index_w}], s1, s2)\n\n"
                     if mode == 'uvu':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,zu,zv->zu', ws[{len(wshapes)}], s1, s2)\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zu,zv->zu', ws[{index_w}], s1, s2)\n\n"
 
                     continue
 
@@ -263,21 +297,9 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s1 = s1.reshape(batch, {mul_1})\n"
 
                     if mode == 'uvw':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,zu,zvi->zwi', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2, mul_out)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_1 * mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zu,zvi->zwi', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
                     if mode == 'uvu':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,zu,zvi->zui', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zu,zvi->zui', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
 
                     continue
 
@@ -285,44 +307,20 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s2 = s2.reshape(batch, {mul_2})\n"
 
                     if mode == 'uvw':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,zui,zv->zwi', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2, mul_out)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_1 * mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zui,zv->zwi', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
                     if mode == 'uvu':
-                        code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,zui,zv->zui', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                        code += "\n"
-
-                        wshapes += [(mul_1, mul_2)]
-
-                        for pos in range(index_out, index_out + dim_out):
-                            count[pos] += mul_2
+                        code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zui,zv->zui', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
 
                     continue
 
                 if l_1 == l_2 and l_out == 0 and mode == 'uvw' and normalization == 'component' and weight:
                     # Cl_l_0 = eye(3) / sqrt(2L+1)
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,zui,zvi->zw', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                    code += "\n"
-
-                    wshapes += [(mul_1, mul_2, mul_out)]
-
-                    for pos in range(index_out, index_out + dim_out):
-                        count[pos] += mul_1 * mul_2
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zui,zvi->zw', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if l_1 == l_2 and l_out == 0 and mode == 'uvu' and normalization == 'component' and weight:
                     # Cl_l_0 = eye(3) / sqrt(2L+1)
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,zui,zvi->zu', ws[{len(wshapes)}], s1, s2).reshape(batch, {dim_out})\n"
-                    code += "\n"
-
-                    wshapes += [(mul_1, mul_2)]
-
-                    for pos in range(index_out, index_out + dim_out):
-                        count[pos] += mul_2
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zui,zvi->zu', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvw' and normalization == 'component' and weight:
@@ -330,13 +328,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
                     code += f"        s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
                     code += f"        s1, s2 = torch.broadcast_tensors(s1, s2)\n"
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,zuvi->zwi', ws[{len(wshapes)}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n"
-                    code += "\n"
-
-                    wshapes += [(mul_1, mul_2, mul_out)]
-
-                    for pos in range(index_out, index_out + dim_out):
-                        count[pos] += mul_1 * mul_2
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zuvi->zwi', ws[{index_w}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvu' and normalization == 'component' and weight:
@@ -344,13 +336,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
                     code += f"        s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
                     code += f"        s1, s2 = torch.broadcast_tensors(s1, s2)\n"
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,zuvi->zui', ws[{len(wshapes)}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n"
-                    code += "\n"
-
-                    wshapes += [(mul_1, mul_2)]
-
-                    for pos in range(index_out, index_out + dim_out):
-                        count[pos] += mul_2
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zuvi->zui', ws[{index_w}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
                     continue
 
             if last_ss != (i_1, i_2, mode[:2]):
@@ -368,77 +354,36 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
             if mode == 'uvw':
                 assert weight
-                code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uvw,ijk,zuvij->zwk', ws[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                wshapes += [(mul_1, mul_2, mul_out)]
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += mul_1 * mul_2
-
+                code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,ijk,zuvij->zwk', ws[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             if mode == 'uvu':
                 assert mul_1 == mul_out
                 if weight:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,ijk,zuvij->zuk', ws[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                    wshapes += [(mul_1, mul_2)]
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,ijk,zuvij->zuk', ws[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
                 else:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += mul_2
-
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('ijk,zuvij->zuk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             if mode == 'uvv':
                 assert mul_2 == mul_out
                 if weight:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,ijk,zuvij->zvk', ws[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                    wshapes += [(mul_1, mul_2)]
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,ijk,zuvij->zvk', ws[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
                 else:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zvk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += mul_1
-
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('ijk,zuvij->zvk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             if mode == 'uuw':
                 assert mul_1 == mul_2
                 assert weight
-                code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uw,ijk,zuij->zwk', sw[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                wshapes += [(mul_1, mul_out)]
-
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += mul_1
-
+                code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uw,ijk,zuij->zwk', sw[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             if mode == 'uuu':
                 assert mul_1 == mul_2 == mul_out
                 if weight:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}u,ijk,zuij->zuk', sw[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                    wshapes += [(mul_1,)]
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}u,ijk,zuij->zuk', sw[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
                 else:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuij->zuk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += 1
-
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('ijk,zuij->zuk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             if mode == 'uvuv':
                 assert mul_1 * mul_2 == mul_out
                 if weight:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('{z}uv,ijk,zuvij->zuvk', sw[{len(wshapes)}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-                    wshapes += [(mul_1, mul_2)]
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,ijk,zuvij->zuvk', sw[{index_w}], w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
                 else:
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += ein('ijk,zuvij->zuvk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
-
-                for pos in range(index_out, index_out + dim_out):
-                    count[pos] += 1
-
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('ijk,zuvij->zuvk', w3j[{index_w3j}], ss).reshape(batch, {dim_out})\n"
             code += "\n"
-
-        if count:
-            ilast = 0
-            clast = count[0]
-            for i, c in enumerate(count):
-                if clast != c:
-                    if clast > 1:
-                        code += f"    out[:, {ilast}:{i}].div_({clast ** 0.5})\n"
-                    clast = c
-                    ilast = i
-            if clast > 1:
-                code += f"    out[:, {ilast}:].div_({clast ** 0.5})\n"
 
         code += f"    return out"
 
@@ -460,12 +405,12 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
         # weights
         self.weight_shapes = wshapes
         self.weight_numel = sum(math.prod(shape) for shape in self.weight_shapes)
-        weight_infos = [
-            (i_1, i_2, i_out, mode, shape)
-            for (i_1, i_2, i_out, mode), shape in zip(
+        self.weight_infos = [
+            (i_1, i_2, i_out, mode, path_weight, shape)
+            for (i_1, i_2, i_out, mode, path_weight), shape in zip(
                 [
-                    (i_1, i_2, i_out, mode)
-                    for i_1, i_2, i_out, mode, weight in instr
+                    (i_1, i_2, i_out, mode, path_weight)
+                    for i_1, i_2, i_out, mode, weight, path_weight in instr
                     if weight
                 ],
                 wshapes
@@ -475,7 +420,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
         if own_weight:
             assert not self.weight_batch, "weight_batch and own_weight are incompatible"
             self.weight = torch.nn.ParameterDict()
-            for i, (i_1, i_2, i_out, mode, shape) in enumerate(weight_infos):
+            for i, (i_1, i_2, i_out, mode, path_weight, shape) in enumerate(self.weight_infos):
                 mul_1, (l_1, p_1) = self.Rs_in1[i_1]
                 mul_2, (l_2, p_2) = self.Rs_in2[i_2]
                 mul_out, (l_out, p_out) = self.Rs_out[i_out]

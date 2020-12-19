@@ -7,12 +7,12 @@ from e3nn_little import o3
 
 
 @torch.jit.script
-def y0(x, _y, _z):
+def y0(x, _y, _z):  # pragma: no cover
     return torch.ones(x.shape + (1,), dtype=x.dtype, device=x.device)
 
 
 @torch.jit.script
-def y1(x, y, z):
+def y1(x, y, z):  # pragma: no cover
     return -1.73205080756888 * torch.stack([
         y,
         z,
@@ -21,7 +21,7 @@ def y1(x, y, z):
 
 
 @torch.jit.script
-def y2(x, y, z):
+def y2(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     return torch.stack([
@@ -34,7 +34,7 @@ def y2(x, y, z):
 
 
 @torch.jit.script
-def y3(x, y, z):
+def y3(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -50,7 +50,7 @@ def y3(x, y, z):
 
 
 @torch.jit.script
-def y4(x, y, z):
+def y4(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -68,7 +68,7 @@ def y4(x, y, z):
 
 
 @torch.jit.script
-def y5(x, y, z):
+def y5(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -88,7 +88,7 @@ def y5(x, y, z):
 
 
 @torch.jit.script
-def y6(x, y, z):
+def y6(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -110,7 +110,7 @@ def y6(x, y, z):
 
 
 @torch.jit.script
-def y7(x, y, z):
+def y7(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -134,7 +134,7 @@ def y7(x, y, z):
 
 
 @torch.jit.script
-def y8(x, y, z):
+def y8(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -160,7 +160,7 @@ def y8(x, y, z):
 
 
 @torch.jit.script
-def y9(x, y, z):
+def y9(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -188,7 +188,7 @@ def y9(x, y, z):
 
 
 @torch.jit.script
-def y10(x, y, z):
+def y10(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2
@@ -218,7 +218,7 @@ def y10(x, y, z):
 
 
 @torch.jit.script
-def y11(x, y, z):
+def y11(x, y, z):  # pragma: no cover
     xx = x**2
     yy = y**2
     zz = z**2

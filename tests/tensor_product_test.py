@@ -8,10 +8,13 @@ def test():
     Rs_in1 = o3.IrList([0, 1, 2])
     Rs_in2 = o3.IrList([0, 1, 2])
     Rs_out = o3.IrList([0, 1, 2])
+    in1 = [(mul, ir, 1.0) for mul, ir in Rs_in1]
+    in2 = [(mul, ir, 1.0) for mul, ir in Rs_in2]
+    out = [(mul, ir, 1.0) for mul, ir in Rs_out]
     instr = [
-        (1, 1, 1, 'uvw', 1.0),
+        (1, 1, 1, 'uvw', True, 1.0),
     ]
-    m = CustomWeightedTensorProduct(Rs_in1, Rs_in2, Rs_out, instr)
+    m = CustomWeightedTensorProduct(in1, in2, out, instr)
     x1 = torch.randn(Rs_in1.dim)
     x2 = torch.randn(Rs_in2.dim)
     m(x1, x2)
