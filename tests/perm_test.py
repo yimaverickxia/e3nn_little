@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from e3nn import perm
+from e3nn_little import perm
 
 
 @pytest.mark.parametrize('n', [0, 1, 2, 3, 4, 5])
