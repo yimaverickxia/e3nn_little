@@ -3,3 +3,5 @@ notebook
 *.egg-info
 __pycache__
 QM9
+wandb
+*.pk

@@ -519,6 +519,11 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                             ws += [weight[i:i+d].reshape(shape)]
                         i += d
                     weight = ws
+                if isinstance(weight, list):
+                    if self.weight_batch:
+                        weight = [w.reshape(-1, *shape) for w, shape in zip(weight, self.weight_shapes)]
+                    else:
+                        weight = [w.reshape(*shape) for w, shape in zip(weight, self.weight_shapes)]
             else:
                 weight = []
 
