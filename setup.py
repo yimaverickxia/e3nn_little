@@ -37,6 +37,7 @@ setup(
     install_requires=[
         'sympy',
         'torch>=1.4.0',
+        'torch_geometric',
     ],
     include_package_data=True,
     classifiers=[
