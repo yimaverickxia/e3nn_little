@@ -10,6 +10,12 @@ def test_all_sh():
     ls = list(range(11 + 1))
     pos = torch.randn(4, 3)
     o3.spherical_harmonics(ls, pos)
+    for l in ls:
+        o3.spherical_harmonics(l, pos)
+
+
+def test_zeros():
+    assert torch.allclose(o3.spherical_harmonics([0, 1], torch.zeros(1, 3), normalization='norm'), torch.tensor([[1, 0, 0, 0.0]]))
 
 
 def test_sh_equivariance1():

@@ -1,5 +1,6 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import math
+from math import sqrt
 from typing import List, Tuple
 
 import torch
@@ -241,7 +242,6 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
             if dim_1 == 0 or dim_2 == 0 or dim_out == 0:
                 continue
 
-            # TODO test variance
             alpha = out_var[i_out] / sum(path_weight_ * in1_var[i_1_] * in2_var[i_2_] for i_1_, i_2_, i_out_, _, _, path_weight_ in instr if i_out_ == i_out)
 
             code += (
@@ -254,7 +254,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
             assert mode in ['uvw', 'uvu', 'uvv', 'uuw', 'uuu', 'uvuv']
 
-            c = math.sqrt(alpha * path_weight / {
+            c = sqrt(alpha * path_weight / {
                 'uvw': (mul_1 * mul_2),
                 'uvu': mul_2,
                 'uvv': mul_1,
@@ -315,12 +315,12 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
 
                 if l_1 == l_2 and l_out == 0 and mode == 'uvw' and normalization == 'component' and weight:
                     # Cl_l_0 = eye(3) / sqrt(2L+1)
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zui,zvi->zw', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zui,zvi->zw', ws[{index_w}] / {sqrt(2 * l_1 + 1)}, s1, s2).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if l_1 == l_2 and l_out == 0 and mode == 'uvu' and normalization == 'component' and weight:
                     # Cl_l_0 = eye(3) / sqrt(2L+1)
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zui,zvi->zu', ws[{index_w}], s1, s2).reshape(batch, {dim_out})\n\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zui,zvi->zu', ws[{index_w}] / {sqrt(2 * l_1 + 1)}, s1, s2).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvw' and normalization == 'component' and weight:
@@ -328,7 +328,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
                     code += f"        s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
                     code += f"        s1, s2 = torch.broadcast_tensors(s1, s2)\n"
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zuvi->zwi', ws[{index_w}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uvw,zuvi->zwi', ws[{index_w}] / {sqrt(2)}, torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
                     continue
 
                 if (l_1, l_2, l_out) == (1, 1, 1) and mode == 'uvu' and normalization == 'component' and weight:
@@ -336,7 +336,7 @@ def main(x1: torch.Tensor, x2: torch.Tensor, ws: List[torch.Tensor], w3j: List[t
                     code += f"        s1 = s1.reshape(batch, {mul_1}, 1, {2 * l_1 + 1})\n"
                     code += f"        s2 = s2.reshape(batch, 1, {mul_2}, {2 * l_2 + 1})\n"
                     code += f"        s1, s2 = torch.broadcast_tensors(s1, s2)\n"
-                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zuvi->zui', ws[{index_w}], torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
+                    code += f"        out[:, {index_out}:{index_out+dim_out}] += {c} * ein('{z}uv,zuvi->zui', ws[{index_w}] / {sqrt(2)}, torch.cross(s1, s2, dim=3)).reshape(batch, {dim_out})\n\n"
                     continue
 
             if last_ss != (i_1, i_2, mode[:2]):
