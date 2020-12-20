@@ -53,19 +53,18 @@ def tetris():
 class Network(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        self.sh = [0, 1, 2, 3]
-        irreps_sh = o3.Irreps([(1, l, (-1)**l) for l in self.sh])
-        irreps_mid = "64x0e + 24x1e + 24x1o + 16x2e + 16x2o"
-        irreps_out = "0o + 6x0e"
+        self.irreps_sh = o3.Irreps([(1, l, (-1)**l) for l in range(3 + 1)])
+        irreps_mid = o3.Irreps("64x0e + 24x1e + 24x1o + 16x2e + 16x2o")
+        irreps_out = o3.Irreps("0o + 6x0e")
 
         self.tp1 = FullyConnectedWeightedTensorProduct(
-            irreps_in1=irreps_sh,
-            irreps_in2=irreps_sh,
+            irreps_in1=self.irreps_sh,
+            irreps_in2=self.irreps_sh,
             irreps_out=irreps_mid,
         )
         self.tp2 = FullyConnectedWeightedTensorProduct(
             irreps_in1=irreps_mid,
-            irreps_in2=irreps_sh,
+            irreps_in2=self.irreps_sh,
             irreps_out=irreps_out,
         )
 
@@ -75,7 +74,7 @@ class Network(torch.nn.Module):
 
         edge_src, edge_dst = radius_graph(data.pos, 1.1, data.batch)  # tensors of indices representing the graph
         edge_vec = data.pos[edge_src] - data.pos[edge_dst]
-        edge_sh = o3.spherical_harmonics(self.sh, edge_vec, normalization='component')
+        edge_sh = o3.spherical_harmonics(self.irreps_sh.ls, edge_vec, normalization='component')
 
         # For each node, the initial features are the sum of the spherical harmonics of the neighbors
         node_features = scatter(edge_sh, edge_dst, dim=0).div(num_neighbors**0.5)

@@ -134,12 +134,16 @@ class Irreps(tuple):
         return sum(mul for mul, _ in self)
 
     @property
+    def ls(self):
+        return [l for mul, (l, p) in self for _ in range(mul)]
+
+    @property
     def lmax(self):
         """
         :param irreps: list of triplet (multiplicity, representation order, [parity])
         :return: maximum l present in the signal
         """
-        return max(l for mul, (l, _) in self if mul > 0)
+        return max(self.ls)
 
     def __repr__(self):
         """
