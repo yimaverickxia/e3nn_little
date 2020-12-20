@@ -1,13 +1,14 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import itertools
-from abc import ABC, abstractmethod
+import math
 import random
+from abc import ABC, abstractmethod
 
 import torch
-from e3nn_little import o3, perm
+from e3nn_little import o3
 
 
-class Group(ABC):  # pragma: no cover
+class LieGroup(ABC):  # pragma: no cover
     @abstractmethod
     def irrep_indices(self):
         while False:
@@ -36,8 +37,12 @@ class Group(ABC):  # pragma: no cover
     def inverse(self, g):
         return NotImplemented
 
+    @abstractmethod
+    def haar(self, g):
+        return NotImplemented
 
-class SO3(Group):
+
+class SO3(LieGroup):
     def irrep_indices(self):
         for l in itertools.count():
             yield l
@@ -63,8 +68,11 @@ class SO3(Group):
         a, b, c = g
         return (-c, -b, -a)
 
+    def haar(self, g):
+        return o3.abc_to_angle(*g)
 
-class O3(Group):
+
+class O3(LieGroup):
     def irrep_indices(self):
         for l in itertools.count():
             yield o3.Irrep(l, (-1)**l)
@@ -96,32 +104,12 @@ class O3(Group):
         a, b, c, k = g
         return (-c, -b, -a, k)
 
-
-class Sn(Group):
-    def __init__(self, n):
-        self.n = n
-
-    def irrep_indices(self):
-        while False:
-            yield None
-
-    def irrep(self, r):
-        return NotImplemented
-
-    def compose(self, g1, g2):
-        return perm.compose(g1, g2)
-
-    def random(self):
-        return perm.rand(self.n)
-
-    def identity(self):
-        return perm.identity(self.n)
-
-    def inverse(self, g):
-        return perm.inverse(g)
+    def haar(self, g):
+        a, b, c, k = g
+        return o3.abc_to_angle(a, b, c) if k % 2 == 0 else math.inf
 
 
-def is_representation(group: Group, D, eps):
+def is_representation(group: LieGroup, D, eps):
     e = group.identity()
     I = D(e)
 
@@ -142,5 +130,19 @@ def is_representation(group: Group, D, eps):
     return True
 
 
-#TODO implement is_group and add tests
-#TODO Group + LieGroup?
+def is_group(g: LieGroup, eps) -> bool:
+    e = g.identity()
+    g1 = g.random()
+    g2 = g.random()
+    g3 = g.random()
+
+    g4 = g.compose(e, g1)
+    if not g.haar(g.compose(g4, g.inverse(g1))) < eps:
+        return False
+
+    g4 = g.compose(g.compose(g1, g2), g3)
+    g5 = g.compose(g1, g.compose(g2, g3))
+    if not g.haar(g.compose(g4, g.inverse(g5))) < eps:
+        return False
+
+    return True

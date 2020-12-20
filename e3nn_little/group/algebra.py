@@ -1,10 +1,10 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import torch
-from e3nn_little.group import Group
+from e3nn_little.group import LieGroup
 from e3nn_little.math import complete_basis, direct_sum, kron
 
 
-def intertwiners(group: Group, D1, D2, eps=1e-9):
+def intertwiners(group: LieGroup, D1, D2, eps=1e-9):
     """
     Compute a basis of the vector space of matrices A such that
     D1(g) A = A D2(g) for all g in O(3)
@@ -37,7 +37,7 @@ def intertwiners(group: Group, D1, D2, eps=1e-9):
     return torch.stack(solutions) if len(solutions) > 0 else torch.zeros(0, I1.shape[0], I2.shape[0])
 
 
-def has_rep_in_rep(group: Group, D, D_small, eps=1e-9):
+def has_rep_in_rep(group: LieGroup, D, D_small, eps=1e-9):
     """computes if a representation appears in another one
     Given a "big" representation and a "small" representation
     computes how many times the small appears in the big one and return:

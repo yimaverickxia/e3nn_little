@@ -124,3 +124,9 @@ def compose(a1, b1, c1, a2, b2, c2):
     rotz = rot(0, -b, -a) @ comp
     c = torch.atan2(rotz[1, 0], rotz[0, 0])
     return a, b, c
+
+
+def abc_to_angle(alpha, beta, gamma):
+    R = rot(alpha, beta, gamma)
+    tr = R[..., 0, 0] + R[..., 1, 1] + R[..., 2, 2]
+    return torch.acos(tr.sub(1).div(2).clamp(-1, 1))

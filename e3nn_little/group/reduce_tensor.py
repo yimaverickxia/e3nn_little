@@ -3,12 +3,12 @@ import itertools
 
 import torch
 from e3nn_little import perm
-from e3nn_little.group import Group, has_rep_in_rep, is_representation
+from e3nn_little.group import LieGroup, has_rep_in_rep, is_representation
 from e3nn_little.math import direct_sum, kron
 from e3nn_little.util import torch_default_dtype
 
 
-def reduce_tensor(group: Group, formula, eps=1e-9, **kw_representations):
+def reduce_tensor(group: LieGroup, formula, eps=1e-9, **kw_representations):
     """reduce a tensor with symmetries into irreducible representations
     Usage
     irreps, Q = rs.reduce_tensor('ijkl=jikl=ikjl=ijlk', i=rep)
