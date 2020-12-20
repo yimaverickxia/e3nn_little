@@ -185,14 +185,14 @@ class Conv(MessagePassing):
     def forward(self, x, z, edge_index, edge_weight, edge_sh, edge_type, size=None):
         with torch.autograd.profiler.record_function("Conv"):
             # x = [num_atoms, dim(irreps_in)]
-            s = self.si(x, self.si_weight[z])
+            s = self.si(x, self.si_weight.index_select(0, z))
 
-            x = self.lin1(x, self.lin1_weight[z])
-            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_weight=edge_weight, edge_type=edge_type)
-            x = self.lin2(x, self.lin2_weight[z])
+            x = self.lin1(x, self.lin1_weight.index_select(0, z))
+            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_weight=edge_weight)
+            x = self.lin2(x, self.lin2_weight.index_select(0, z))
 
             return s + x
 
-    def message(self, x_j, sh, edge_weight, edge_type):
+    def message(self, x_j, sh, edge_weight):
         w = edge_weight @ (self.tp_weight / edge_weight.shape[1])
         return self.tp(x_j, sh, w)
