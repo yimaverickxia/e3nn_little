@@ -154,10 +154,10 @@ class Conv(MessagePassing):
         self.irreps_sh = irreps_sh.simplify()
 
         self.si = Linear(self.irreps_in, self.irreps_out, internal_weights=False, shared_weights=False)
-        self.si_weight = torch.nn.Parameter(torch.randn(25, self.si.tp.weight_numel))
+        self.si_weight = torch.nn.Parameter(torch.randn(5, self.si.tp.weight_numel))
 
         self.lin1 = Linear(self.irreps_in, self.irreps_in, internal_weights=False, shared_weights=False)
-        self.lin1_weight = torch.nn.Parameter(torch.randn(25, self.lin1.tp.weight_numel))
+        self.lin1_weight = torch.nn.Parameter(torch.randn(5, self.lin1.tp.weight_numel))
 
         instr = []
         irreps = []
@@ -178,12 +178,9 @@ class Conv(MessagePassing):
         in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
         out = [(mul, ir, 1.0) for mul, ir in irreps]
         self.tp = WeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
-        self.ws = torch.nn.ParameterList([
-            torch.nn.Parameter(torch.randn(25, rad_features, prod(shape)))
-            for shape in self.tp.weight_shapes
-        ])
+        self.tp_weight = torch.nn.Parameter(torch.randn(25, rad_features, self.tp.weight_numel))
         self.lin2 = Linear(irreps, self.irreps_out, internal_weights=False, shared_weights=False)
-        self.lin2_weight = torch.nn.Parameter(torch.randn(25, self.lin2.tp.weight_numel))
+        self.lin2_weight = torch.nn.Parameter(torch.randn(5, self.lin2.tp.weight_numel))
 
     def forward(self, x, z, edge_index, edge_weight, edge_sh, edge_type, size=None):
         with torch.autograd.profiler.record_function("Conv"):
@@ -197,5 +194,8 @@ class Conv(MessagePassing):
             return s + x
 
     def message(self, x_j, sh, edge_weight, edge_type):
-        ws = [torch.gather(torch.einsum('tfw,ef->tew', w, edge_weight), 0, edge_type.reshape(1, -1, 1).repeat(1, 1, w.shape[2])) for w in self.ws]
-        return self.tp(x_j, sh, ws)
+        w = self.tp_weight.new_zeros(len(edge_weight), self.tp_weight.shape[2])
+        for i in range(25):
+            w[edge_type == i] = edge_weight[edge_type == i] @ self.tp_weight[i] / edge_weight.shape[1]
+        # w = torch.gather(torch.einsum('tfw,ef->tew', self.tp_weight, edge_weight), 0, edge_type.reshape(1, -1, 1).repeat(1, 1, self.tp_weight.shape[2]))
+        return self.tp(x_j, sh, w)
