@@ -197,5 +197,5 @@ class Conv(MessagePassing):
             return s + x
 
     def message(self, x_j, sh, edge_weight, edge_type):
-        ws = [torch.einsum('efw,ef->ew', w[edge_type], edge_weight) for w in self.ws]
+        ws = [torch.gather(torch.einsum('tfw,ef->tew', w, edge_weight), 0, edge_type.reshape(1, -1, 1).repeat(1, 1, w.shape[2])) for w in self.ws]
         return self.tp(x_j, sh, ws)
