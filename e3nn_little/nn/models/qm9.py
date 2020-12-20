@@ -85,7 +85,7 @@ class Network(torch.nn.Module):
         edge_sh = edge_c[:, None] * edge_sh / self.num_neighbors**0.5
 
         # z : [1, 6, 7, 8, 9] -> [0, 1, 2, 3, 4]
-        z = torch.tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[z]
+        z = z.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[z]
         edge_type = 5 * z[row] + z[col]
 
         h = scatter(edge_sh, row, dim=0, dim_size=len(pos))
