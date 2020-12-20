@@ -8,7 +8,7 @@ from torch_scatter import scatter
 
 from e3nn_little import o3
 from e3nn_little.math import swish
-from e3nn_little.nn import (FC, CustomWeightedTensorProduct, Gate,
+from e3nn_little.nn import (FC, WeightedTensorProduct, Gate,
                             GaussianBasis, Linear)
 
 qm9_target_dict = {
@@ -28,35 +28,35 @@ qm9_target_dict = {
 
 
 class Network(torch.nn.Module):
-    def __init__(self, muls=(128, 12, 0), ps=(1, -1), lmax=1,
+    def __init__(self, muls=(128, 12, 0), lmax=1,
                  num_layers=3, cutoff=10.0, rad_gaussians=50,
                  rad_hs=(512, 512), num_neighbors=20,
-                 readout='add', dipole=False, mean=None, std=None, scale=None,
+                 readout='add', mean=None, std=None, scale=None,
                  atomref=None):
         super().__init__()
 
         assert readout in ['add', 'sum', 'mean']
         self.readout = readout
         self.cutoff = cutoff
-        self.dipole = dipole
         self.mean = mean
         self.std = std
         self.scale = scale
         self.num_neighbors = num_neighbors
 
         self.embedding = Embedding(100, muls[0])
+        self.embedding.weight.requires_grad = False
         self.irreps_in = o3.Irreps([(muls[0], 0, 1)])
 
         self.radial = torch.nn.Sequential(
             GaussianBasis(rad_gaussians, cutoff),
-            FC((rad_gaussians, ) + rad_hs, swish, out_scale='component', out_act=True)
+            FC((rad_gaussians, ) + rad_hs, swish, variance_in=1 / rad_gaussians, out_act=True)
         )
         self.irreps_sh = o3.Irreps([(1, l, (-1)**l) for l in range(lmax + 1)])  # spherical harmonics representation
 
         irreps = self.irreps_in
         modules = []
         for _ in range(num_layers):
-            act = make_gated_block(irreps, muls, ps, self.irreps_sh)
+            act = make_gated_block(irreps, muls, self.irreps_sh)
             conv = Conv(irreps, act.irreps_in, self.irreps_sh, rad_hs[-1])
             irreps = act.irreps_out.simplify()
 
@@ -64,7 +64,7 @@ class Network(torch.nn.Module):
 
         self.layers = torch.nn.ModuleList(modules)
 
-        self.irreps_out = o3.Irreps([(1, 0, p) for p in ps])
+        self.irreps_out = o3.Irreps("0e + 0o")
         self.layers.append(Conv(irreps, self.irreps_out, self.irreps_sh, rad_hs[-1]))
 
         self.register_buffer('initial_atomref', atomref)
@@ -72,6 +72,7 @@ class Network(torch.nn.Module):
         if atomref is not None:
             self.atomref = Embedding(100, 1)
             self.atomref.weight.data.copy_(atomref)
+            self.atomref.weight.requires_grad = False
 
     def forward(self, z, pos, batch=None):
         assert z.dim() == 1 and z.dtype == torch.long
@@ -119,7 +120,7 @@ class Network(torch.nn.Module):
         return out
 
 
-def make_gated_block(irreps_in, muls, ps, irreps_sh):
+def make_gated_block(irreps_in, muls, irreps_sh):
     """
     Make a Gate assuming many things
     """
@@ -130,10 +131,10 @@ def make_gated_block(irreps_in, muls, ps, irreps_sh):
         for l in range(abs(l_in - l_sh), l_in + l_sh + 1)
     ]
 
-    scalars = o3.Irreps([(muls[0], 0, p) for p in ps if (0, p) in irreps_available])
+    scalars = o3.Irreps([(muls[0], 0, p) for p in (1, -1) if (0, p) in irreps_available])
     act_scalars = [(mul, swish if p == 1 else torch.tanh) for mul, (_, p) in scalars]
 
-    nonscalars = o3.Irreps([(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in ps if (l, p*(-1)**l) in irreps_available])
+    nonscalars = o3.Irreps([(muls[l], l, p*(-1)**l) for l in range(1, len(muls)) for p in (1, -1) if (l, p*(-1)**l) in irreps_available])
     if (0, +1) in irreps_available:
         gates = o3.Irreps([(nonscalars.num_irreps, 0, +1)])
         act_gates = [(-1, torch.sigmoid)]
@@ -172,9 +173,9 @@ class Conv(MessagePassing):
         in1 = [(mul, ir, 1.0) for mul, ir in self.irreps_in]
         in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
         out = [(mul, ir, 1.0) for mul, ir in irreps]
-        self.tp = CustomWeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
+        self.tp = WeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
         self.ws = torch.nn.ModuleList([
-            FC((rad_features, prod(shape)), in_scale='component', out_scale='zero')
+            FC((rad_features, prod(shape)), variance_out=1 / prod(shape))
             for shape in self.tp.weight_shapes
         ])
         self.lin2 = Linear(irreps, self.irreps_out)

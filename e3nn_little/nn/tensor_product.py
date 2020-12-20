@@ -1,17 +1,17 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except
 import math
 from math import sqrt
-from typing import List, Tuple
+from typing import List, Tuple, Any
 
 import torch
 from e3nn_little import o3
 from e3nn_little.util import eval_code
 
 
-def WeightedTensorProduct(irreps_in1, irreps_in2, irreps_out, normalization='component', internal_weights=True, shared_weights=True):
-    irreps_in1 = irreps_in1.simplify()
-    irreps_in2 = irreps_in2.simplify()
-    irreps_out = irreps_out.simplify()
+def FullyConnectedWeightedTensorProduct(irreps_in1, irreps_in2, irreps_out, normalization='component', internal_weights=True, shared_weights=True):
+    irreps_in1 = o3.Irreps(irreps_in1).simplify()
+    irreps_in2 = o3.Irreps(irreps_in2).simplify()
+    irreps_out = o3.Irreps(irreps_out).simplify()
 
     in1 = [(mul, ir, 1.0) for mul, ir in irreps_in1]
     in2 = [(mul, ir, 1.0) for mul, ir in irreps_in2]
@@ -24,10 +24,13 @@ def WeightedTensorProduct(irreps_in1, irreps_in2, irreps_out, normalization='com
         for i_out, (_, (l_out, p_out)) in enumerate(irreps_out)
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
     ]
-    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights, shared_weights)
+    return WeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights, shared_weights)
 
 
 def GroupedWeightedTensorProduct(irreps_in1, irreps_in2, irreps_out, groups=math.inf, normalization='component', internal_weights=True, shared_weights=True):
+    irreps_in1 = o3.Irreps(irreps_in1)
+    irreps_in2 = o3.Irreps(irreps_in2)
+    irreps_out = o3.Irreps(irreps_out)
     groups = min(groups, min(mul for mul, _ in irreps_in1), min(mul for mul, _ in irreps_out))
 
     irreps_in1 = [(mul // groups + (g < mul % groups), (l, p)) for mul, (l, p) in irreps_in1 for g in range(groups)]
@@ -45,12 +48,12 @@ def GroupedWeightedTensorProduct(irreps_in1, irreps_in2, irreps_out, groups=math
         if abs(l_1 - l_2) <= l_out <= l_1 + l_2 and p_1 * p_2 == p_out
         if i_1 % groups == i_out % groups
     ]
-    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights, shared_weights)
+    return WeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights, shared_weights)
 
 
 def ElementwiseTensorProduct(irreps_in1, irreps_in2, normalization='component'):
-    irreps_in1 = irreps_in1.simplify()
-    irreps_in2 = irreps_in2.simplify()
+    irreps_in1 = o3.Irreps(irreps_in1).simplify()
+    irreps_in2 = o3.Irreps(irreps_in2).simplify()
 
     assert irreps_in1.num_irreps == irreps_in2.num_irreps
 
@@ -86,15 +89,15 @@ def ElementwiseTensorProduct(irreps_in1, irreps_in2, normalization='component'):
     in2 = [(mul, ir, 1.0) for mul, ir in irreps_in2]
     out = [(mul, ir, 1.0) for mul, ir in irreps_out]
 
-    return CustomWeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights=False)
+    return WeightedTensorProduct(in1, in2, out, instr, normalization, internal_weights=False)
 
 
 class Identity(torch.nn.Module):
     def __init__(self, irreps_in, irreps_out):
         super().__init__()
 
-        self.irreps_in = irreps_in.simplify()
-        self.irreps_out = irreps_out.simplify()
+        self.irreps_in = o3.Irreps(irreps_in).simplify()
+        self.irreps_out = o3.Irreps(irreps_out).simplify()
 
         assert self.irreps_in == self.irreps_out
 
@@ -130,7 +133,7 @@ class Linear(torch.nn.Module):
         ]
         in1 = [(mul, ir, 1.0) for mul, ir in self.irreps_in]
         out = [(mul, ir, 1.0) for mul, ir in self.irreps_out]
-        self.tp = CustomWeightedTensorProduct(in1, [(1, (0, 1), 1.0)], out, instr, normalization, internal_weights=True)
+        self.tp = WeightedTensorProduct(in1, [(1, (0, 1), 1.0)], out, instr, normalization, internal_weights=True)
 
         output_mask = torch.cat([
             torch.ones(mul * (2 * l + 1))
@@ -152,12 +155,12 @@ class Linear(torch.nn.Module):
         return self.tp(features, ones)
 
 
-class CustomWeightedTensorProduct(torch.nn.Module):
+class WeightedTensorProduct(torch.nn.Module):
     def __init__(
             self,
-            in1: List[Tuple[int, Tuple[int, int], float]],
-            in2: List[Tuple[int, Tuple[int, int], float]],
-            out: List[Tuple[int, Tuple[int, int], float]],
+            in1: List[Tuple[int, Any, float]],
+            in2: List[Tuple[int, Any, float]],
+            out: List[Tuple[int, Any, float]],
             instr: List[Tuple[int, int, int, str, bool, float]],
             normalization: str = 'component',
             internal_weights: bool = True,
@@ -185,9 +188,9 @@ class CustomWeightedTensorProduct(torch.nn.Module):
         super().__init__()
 
         assert normalization in ['component', 'norm'], normalization
-        self.irreps_in1 = o3.Irreps([(mul, (l, p)) for mul, (l, p), _var in in1])
-        self.irreps_in2 = o3.Irreps([(mul, (l, p)) for mul, (l, p), _var in in2])
-        self.irreps_out = o3.Irreps([(mul, (l, p)) for mul, (l, p), _var in out])
+        self.irreps_in1 = o3.Irreps([(mul, ir) for mul, ir, _var in in1])
+        self.irreps_in2 = o3.Irreps([(mul, ir) for mul, ir, _var in in2])
+        self.irreps_out = o3.Irreps([(mul, ir) for mul, ir, _var in out])
 
         in1_var = [var for _, _, var in in1]
         in2_var = [var for _, _, var in in2]

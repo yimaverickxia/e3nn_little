@@ -16,69 +16,68 @@ from torch_geometric.nn import SchNet
 from e3nn_little.nn.models.qm9 import Network
 
 
-def execute(args):
+def execute(config):
     path = 'QM9'
     dataset = QM9(path)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    torch.manual_seed(args.seed)
+    torch.manual_seed(config['seed'])
 
     # Report meV instead of eV.
-    units = 1000 if args.target in [2, 3, 4, 6, 7, 8, 9, 10] else 1
+    units = 1000 if config['target'] in [2, 3, 4, 6, 7, 8, 9, 10] else 1
 
-    _, datasets = SchNet.from_qm9_pretrained(path, dataset, args.target)
+    _, datasets = SchNet.from_qm9_pretrained(path, dataset, config['target'])
     train_dataset, val_dataset, _test_dataset = datasets
 
     model = Network(
-        muls=(args.mul0, args.mul1, args.mul2),
-        ps=(1,) if 'shp' in args.opts else (1, -1),
-        lmax=args.lmax,
-        num_layers=args.num_layers,
-        rad_gaussians=args.rad_gaussians,
-        rad_hs=(args.rad_h,) * args.rad_layers + (args.rad_bottleneck,),
-        mean=args.mean, std=args.std,
-        atomref=dataset.atomref(args.target),
+        muls=(config['mul0'], config['mul1'], config['mul2']),
+        lmax=config['lmax'],
+        num_layers=config['num_layers'],
+        rad_gaussians=config['rad_gaussians'],
+        rad_hs=(config['rad_h'],) * config['rad_layers'],
+        mean=config['mean'], std=config['std'],
+        atomref=dataset.atomref(config['target']),
     )
     model = model.to(device)
 
     wandb.watch(model)
 
-    loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=False)
+    loader = DataLoader(train_dataset, batch_size=config['bs'], shuffle=False)
     for step, data in enumerate(loader):
         print('profile', step, flush=True)
         with torch.autograd.profiler.profile(use_cuda=torch.cuda.is_available(), record_shapes=True) as prof:
             data = data.to(device)
             pred = model(data.z, data.pos, data.batch)
-            mse = (pred.view(-1) - data.y[:, args.target]).pow(2)
+            mse = (pred.view(-1) - data.y[:, config['target']]).pow(2)
             mse.mean().backward()
         if step == 5:
             prof.export_chrome_trace(f"{datetime.datetime.now()}.json")
             break
 
-    modules = [model.embedding, model.radial] + list(model.layers) + [model.atomref]
-    lrs = [0.1, 0.01] + [1] * len(model.layers) + [0.1]
-    param_groups = []
-    for lr, module in zip(lrs, modules):
-        jac = []
-        for data in DataLoader(train_dataset[:20]):
-            data = data.to(device)
-            jac += [torch.autograd.grad(model(data.z, data.pos), module.parameters())[0].flatten()]
-        jac = torch.stack(jac)
-        kernel = jac @ jac.T
-        print('kernel({}) = {:.2e} +- {:.2e}'.format(module, kernel.mean().item(), kernel.std().item()), flush=True)
-        lr = lr / (kernel.mean() + kernel.std()).item()
-        param_groups.append({
-            'params': list(module.parameters()),
-            'lr': lr,
-        })
+    # modules = [model.embedding, model.radial] + list(model.layers) + [model.atomref]
+    # lrs = [0.1, 0.01] + [1] * len(model.layers) + [0.1]
+    # param_groups = []
+    # for lr, module in zip(lrs, modules):
+    #     jac = []
+    #     for data in DataLoader(train_dataset[:20]):
+    #         data = data.to(device)
+    #         jac += [torch.autograd.grad(model(data.z, data.pos), module.parameters())[0].flatten()]
+    #     jac = torch.stack(jac)
+    #     kernel = jac @ jac.T
+    #     print('kernel({}) = {:.2e} +- {:.2e}'.format(module, kernel.mean().item(), kernel.std().item()), flush=True)
+    #     lr = lr / (kernel.mean() + kernel.std()).item()
+    #     param_groups.append({
+    #         'params': list(module.parameters()),
+    #         'lr': lr,
+    #     })
 
-    lrs = torch.tensor([x['lr'] for x in param_groups])
-    lrs = args.lr * lrs / lrs.max().item()
+    # lrs = torch.tensor([x['lr'] for x in param_groups])
+    # lrs = config['lr'] * lrs / lrs.max().item()
 
-    for group, lr in zip(param_groups, lrs):
-        group['lr'] = lr.item()
+    # for group, lr in zip(param_groups, lrs):
+    #     group['lr'] = lr.item()
 
-    optim = torch.optim.Adam(param_groups)
-    print(optim, flush=True)
+    optim = torch.optim.Adam(model.parameters(), lr=config['lr'])
+    # print(optim, flush=True)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, patience=25, factor=0.5, verbose=True)
 
     dynamics = []
@@ -88,16 +87,16 @@ def execute(args):
     for epoch in itertools.count():
 
         errs = []
-        loader = DataLoader(train_dataset, batch_size=args.bs, shuffle=True)
+        loader = DataLoader(train_dataset, batch_size=config['bs'], shuffle=True)
         for step, data in enumerate(loader):
             data = data.to(device)
 
             pred = model(data.z, data.pos, data.batch)
             optim.zero_grad()
-            (pred.view(-1) - data.y[:, args.target]).pow(2).mean().backward()
+            (pred.view(-1) - data.y[:, config['target']]).pow(2).mean().backward()
             optim.step()
 
-            err = pred.view(-1) - data.y[:, args.target]
+            err = pred.view(-1) - data.y[:, config['target']]
             errs += [err.cpu().detach()]
 
             if time.perf_counter() - wall_print > 15:
@@ -123,7 +122,7 @@ def execute(args):
             with torch.no_grad():
                 pred = model(data.z, data.pos, data.batch)
 
-            err = pred.view(-1) - data.y[:, args.target]
+            err = pred.view(-1) - data.y[:, config['target']]
             errs += [err.cpu().detach()]
         val_err = torch.cat(errs)
 
@@ -156,17 +155,21 @@ def execute(args):
             },
             'lrs': lrs,
         }]
+        dynamics[-1]['_runtime'] = dynamics[-1]['wall']
         wandb.log(dynamics[-1])
 
-        print(f'[{epoch}] Target: {args.target:02d}, MAE TRAIN: {units * train_err.abs().mean():.5f} ± {units * train_err.abs().std():.5f}, MAE VAL: {units * val_err.abs().mean():.5f} ± {units * val_err.abs().std():.5f}', flush=True)
+        print(f'[{epoch}] Target: {config["target"]:02d}, MAE TRAIN: {units * train_err.abs().mean():.5f} ± {units * train_err.abs().std():.5f}, MAE VAL: {units * val_err.abs().mean():.5f} ± {units * val_err.abs().std():.5f}', flush=True)
 
         scheduler.step(val_err.pow(2).mean())
 
         yield {
-            'args': args,
+            'args': config,
             'dynamics': dynamics,
             'state': {k: v.cpu() for k, v in model.state_dict().items()},
         }
+
+        if dynamics[-1]['wall'] > config['wall']:
+            break
 
 
 def main():
@@ -176,39 +179,40 @@ def main():
     }
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--mul0", type=int, default=128)
-    parser.add_argument("--mul1", type=int, default=12)
+    parser.add_argument("--output", type=str)
+    parser.add_argument("--mul0", type=int, default=256)
+    parser.add_argument("--mul1", type=int, default=16)
     parser.add_argument("--mul2", type=int, default=0)
     parser.add_argument("--lmax", type=int, default=1)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--rad_gaussians", type=int, default=50)
-    parser.add_argument("--rad_h", type=int, default=256)
-    parser.add_argument("--rad_bottleneck", type=int, default=256)
-    parser.add_argument("--rad_layers", type=int, default=1)
+    parser.add_argument("--rad_h", type=int, default=512)
+    parser.add_argument("--rad_layers", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-2)
-    parser.add_argument("--lr1", type=float, default=1.0)
-    parser.add_argument("--w_exp", type=float, default=1.0)
-    parser.add_argument("--bs", type=int, default=200)
-    parser.add_argument("--opts", type=str, default="x")
+    parser.add_argument("--bs", type=int, default=50)
     parser.add_argument("--target", type=int, default=7)
     parser.add_argument("--mean", type=float, default=0)
     parser.add_argument("--std", type=float, default=1)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--wall", type=int, default=(3 * 24 - 1) * 3600)
 
     args = parser.parse_args()
 
     wandb.login()
     wandb.init(project="qm9", config=args.__dict__)
+    config = dict(wandb.config)
+    print(config)
 
-    with open(args.output, 'wb') as handle:
-        pickle.dump(args, handle)
+    if config['output']:
+        with open(config['output'], 'wb') as handle:
+            pickle.dump(config, handle)
 
-    for data in execute(args):
-        data['git'] = git
-        with open(args.output, 'wb') as handle:
-            pickle.dump(args, handle)
-            pickle.dump(data, handle)
+    for data in execute(config):
+        if config['output']:
+            data['git'] = git
+            with open(config['output'], 'wb') as handle:
+                pickle.dump(config, handle)
+                pickle.dump(data, handle)
 
 
 if __name__ == "__main__":

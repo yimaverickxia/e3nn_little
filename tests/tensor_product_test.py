@@ -3,9 +3,9 @@ import pytest
 import torch
 
 from e3nn_little import o3
-from e3nn_little.nn import (CustomWeightedTensorProduct,
+from e3nn_little.nn import (WeightedTensorProduct,
                             GroupedWeightedTensorProduct, Identity,
-                            WeightedTensorProduct)
+                            FullyConnectedWeightedTensorProduct)
 
 
 def test():
@@ -18,7 +18,7 @@ def test():
     instr = [
         (1, 1, 1, 'uvw', True, 1.0),
     ]
-    m = CustomWeightedTensorProduct(in1, in2, out, instr)
+    m = WeightedTensorProduct(in1, in2, out, instr)
     x1 = torch.randn(irreps_in1.dim)
     x2 = torch.randn(irreps_in2.dim)
     m(x1, x2)
@@ -28,7 +28,7 @@ def test_wtp():
     irreps_in1 = o3.Irreps("1e + 2e + 3x3o")
     irreps_in2 = o3.Irreps("1e + 2e + 3x3o")
     irreps_out = o3.Irreps("1e + 2e + 3x3o")
-    m = WeightedTensorProduct(irreps_in1, irreps_in2, irreps_out)
+    m = FullyConnectedWeightedTensorProduct(irreps_in1, irreps_in2, irreps_out)
     print(m)
     m(torch.randn(irreps_in1.dim), torch.randn(irreps_in2.dim))
 
@@ -55,7 +55,7 @@ def test_variance(sc):
     n = 1000
     tol = 1.2
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0)],
         [(3, (0, 1), 1.0)],
         [(7, (0, 1), 1.0)],
@@ -66,10 +66,10 @@ def test_variance(sc):
         internal_weights=True,
         _specialized_code=sc,
     )
-    x = m(torch.randn(n, 12), torch.randn(n, 3)).std(0)
+    x = m(torch.randn(n, 12), torch.randn(n, 3)).var(0)
     assert x.mean().log10().abs() < torch.tensor(tol).log10()
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0), (79, (0, 1), 1.0)],
         [(3, (0, 1), 1.0)],
         [(7, (0, 1), 1.0)],
@@ -81,10 +81,10 @@ def test_variance(sc):
         internal_weights=True,
         _specialized_code=sc,
     )
-    x = m(torch.randn(n, 12 + 79), torch.randn(n, 3)).std(0)
+    x = m(torch.randn(n, 12 + 79), torch.randn(n, 3)).var(0)
     assert x.mean().log10().abs() < torch.tensor(tol).log10()
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0), (79, (1, 1), 1.0)],
         [(3, (0, 1), 1.0), (10, (1, 1), 1.0)],
         [(7, (0, 1), 1.0)],
@@ -96,10 +96,10 @@ def test_variance(sc):
         internal_weights=True,
         _specialized_code=sc,
     )
-    x = m(torch.randn(n, 12 + 3 * 79), torch.randn(n, 3 + 10 * 3)).std(0)
+    x = m(torch.randn(n, 12 + 3 * 79), torch.randn(n, 3 + 10 * 3)).var(0)
     assert x.mean().log10().abs() < torch.tensor(tol).log10()
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0), (79, (1, 1), 1.0)],
         [(3, (1, 1), 1.0), (10, (1, 1), 1.0)],
         [(7, (1, 1), 1.0)],
@@ -111,10 +111,10 @@ def test_variance(sc):
         internal_weights=True,
         _specialized_code=sc,
     )
-    x = m(torch.randn(n, 12 + 3 * 79), torch.randn(n, 3 * 3 + 10 * 3)).std(0)
+    x = m(torch.randn(n, 12 + 3 * 79), torch.randn(n, 3 * 3 + 10 * 3)).var(0)
     assert x.mean().log10().abs() < torch.tensor(tol).log10()
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0), (79, (1, 1), 1.0)],
         [(3, (1, 1), 1.0), (10, (2, 1), 3.0)],
         [(7, (1, 1), 2.0)],
@@ -131,7 +131,7 @@ def test_variance(sc):
     x = m(torch.randn(n, 12 + 3 * 79), y).var(0) / 2
     assert x.mean().log10().abs() < torch.tensor(tol).log10()
 
-    m = CustomWeightedTensorProduct(
+    m = WeightedTensorProduct(
         [(12, (0, 1), 1.0), (79, (1, 1), 1.0)],
         [(3, (1, 1), 1.0), (10, (2, 1), 3.0)],
         [(7, (1, 1), 0.5)],

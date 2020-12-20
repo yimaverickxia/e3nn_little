@@ -56,20 +56,20 @@ class SO3(LieGroup):
         return 2 * r + 1
 
     def compose(self, g1, g2):
-        return o3.compose(*g1, *g2)
+        return o3.compose_angles(*g1, *g2)
 
     def random(self):
         return o3.rand_angles()
 
     def identity(self):
-        return (0.0, 0.0, 0.0)
+        return (torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0))
 
     def inverse(self, g):
         a, b, c = g
         return (-c, -b, -a)
 
     def haar(self, g):
-        return o3.abc_to_angle(*g)
+        return o3.angles_to_angle(*g)
 
 
 class O3(LieGroup):
@@ -92,13 +92,13 @@ class O3(LieGroup):
     def compose(self, g1, g2):
         *abc1, p1 = g1
         *abc2, p2 = g2
-        return o3.compose(*abc1, *abc2) + ((p1 + p2) % 2,)
+        return o3.compose_angles(*abc1, *abc2) + ((p1 + p2) % 2,)
 
     def random(self):
         return o3.rand_angles() + (random.choice([0, 1]),)
 
     def identity(self):
-        return (0.0, 0.0, 0.0, 0)
+        return (torch.tensor(0.0), torch.tensor(0.0), torch.tensor(0.0), 0)
 
     def inverse(self, g):
         a, b, c, k = g
@@ -106,7 +106,7 @@ class O3(LieGroup):
 
     def haar(self, g):
         a, b, c, k = g
-        return o3.abc_to_angle(a, b, c) if k % 2 == 0 else math.inf
+        return o3.angles_to_angle(a, b, c) if k % 2 == 0 else math.inf
 
 
 def is_representation(group: LieGroup, D, eps):

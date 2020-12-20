@@ -17,6 +17,7 @@ class Irrep(tuple):
             p = {
                 'e': 1,
                 'o': -1,
+                'y': (-1)**l,
             }[name[-1]]
 
         if isinstance(l, tuple) and p is None:

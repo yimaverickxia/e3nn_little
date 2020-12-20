@@ -9,7 +9,7 @@ def _identity(x):
 
 
 class FC(torch.nn.Module):
-    def __init__(self, hs, act=_identity, in_scale='norm', out_scale='zero', out_act=False):
+    def __init__(self, hs, act=None, variance_in=1, variance_out=1, out_act=False):
         super().__init__()
         assert isinstance(hs, tuple)
         self.hs = hs
@@ -19,12 +19,13 @@ class FC(torch.nn.Module):
             weights.append(torch.nn.Parameter(torch.randn(h1, h2)))
 
         self.weights = torch.nn.ParameterList(weights)
+
+        if act is None:
+            act = _identity
         self.act = normalize2mom(act)
-        self.in_scale = in_scale
-        self.out_scale = out_scale
+        self.variance_in = variance_in
+        self.variance_out = variance_out
         self.out_act = out_act
-        assert self.in_scale in ['component', 'norm']
-        assert self.out_scale in ['component', 'zero']
 
     def __repr__(self):
         return f"{self.__class__.__name__}{self.hs}"
@@ -32,14 +33,14 @@ class FC(torch.nn.Module):
     def forward(self, x):
         with torch.autograd.profiler.record_function(repr(self)):
             for i, W in enumerate(self.weights):
+                h_in, _h_out = W.shape
+
                 if i == 0:  # first layer
-                    if self.in_scale == 'component':
-                        W = W / x.shape[1]**0.5
+                    W = W / (h_in * self.variance_in)**0.5
                 if i > 0:  # not first layer
-                    W = W / x.shape[1]**0.5
-                if i == len(self.weights) - 1:  # last layer
-                    if self.out_scale == 'zero' and not self.out_act:
-                        W = W / x.shape[1]**0.5
+                    W = W / h_in**0.5
+                if i == len(self.weights) - 1 and not self.out_act:  # last layer
+                    W = W * self.variance_out**0.5
 
                 x = x @ W
 
@@ -48,9 +49,7 @@ class FC(torch.nn.Module):
                 if i == len(self.weights) - 1 and self.out_act:  # last layer
                     x = self.act(x)
 
-                if i == len(self.weights) - 1:  # last layer
-                    if self.out_scale == 'zero' and self.out_act:
-                        x = x / W.shape[0]**0.5
-
+                if i == len(self.weights) - 1 and self.out_act:  # last layer
+                    x = x * self.variance_out**0.5
 
             return x

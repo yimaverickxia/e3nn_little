@@ -29,7 +29,7 @@ def test_sh_equivariance1():
         a, b, _ = o3.rand_angles()
         alpha, beta, gamma = o3.rand_angles()
 
-        ra, rb, _ = o3.compose(alpha, beta, gamma, a, b, 0)
+        ra, rb, _ = o3.compose_angles(alpha, beta, gamma, a, b, torch.tensor(0.0))
         Yrx = o3.spherical_harmonics_alpha_beta([l], ra, rb)
 
         Y = o3.spherical_harmonics_alpha_beta([l], a, b)

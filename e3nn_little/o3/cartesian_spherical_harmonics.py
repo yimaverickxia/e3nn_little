@@ -271,23 +271,14 @@ def spherical_harmonics(l, xyz, normalization='integral'):
     assert normalization in ['integral', 'component', 'norm']
 
     with torch.autograd.profiler.record_function(f'spherical_harmonics({ls}, {tuple(xyz.shape[:-1])})'):
-        *size, _ = xyz.shape
-        xyz = xyz.reshape(-1, 3)
-        d = torch.norm(xyz, 2, dim=1)
-        xyz = xyz[d > 0]
-        xyz = xyz / d[d > 0, None]
+        xyz = torch.nn.functional.normalize(xyz, p=2, dim=-1)  # forward 0's instead of nan for zero-radius
 
-        x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
-        sh = torch.cat([_ys[l](x, y, z) for l in ls], dim=1)
-
-        if len(d) > len(sh):
-            out = sh.new_zeros(len(d), sh.shape[1])
-            out[d == 0] = torch.cat([sh.new_ones(1) if l == 0 else sh.new_zeros(2 * l + 1) for l in ls])
-            out[d > 0] = sh
-            sh = out
+        x, y, z = xyz[..., 0], xyz[..., 1], xyz[..., 2]
+        sh = torch.cat([_ys[l](x, y, z) for l in ls], dim=-1)
 
         if normalization == 'integral':
             sh.div_(math.sqrt(4 * math.pi))
         if normalization == 'norm':
             sh.div_(torch.cat([math.sqrt(2 * l + 1) * sh.new_ones(2 * l + 1) for l in ls]))
-        return sh.reshape(*size, sh.shape[1])
+
+        return sh

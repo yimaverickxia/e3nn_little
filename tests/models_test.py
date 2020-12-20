@@ -13,7 +13,7 @@ def test(dtype):
     pos = torch.randn(len(z), 3)
     batch = i % 50
 
-    out = Network()(z, pos, batch)
+    out = Network(muls=(16, 4), num_layers=2)(z, pos, batch)
 
     assert out.shape == (50, 1)
 

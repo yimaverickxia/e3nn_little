@@ -7,12 +7,12 @@ import torch
 
 
 @torch.jit.script
-def _swish_jit_fwd(x):
+def _swish_jit_fwd(x):  # pragma: no cover
     return x * torch.sigmoid(x) * 1.679176792398942
 
 
 @torch.jit.script
-def _swish_jit_bwd(x, grad_output):
+def _swish_jit_bwd(x, grad_output):  # pragma: no cover
     x_sigmoid = torch.sigmoid(x)
     return grad_output * (x_sigmoid * (1 + x * (1 - x_sigmoid))) * 1.679176792398942
 
