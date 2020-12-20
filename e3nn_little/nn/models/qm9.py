@@ -43,17 +43,13 @@ class Network(torch.nn.Module):
         self.scale = scale
         self.num_neighbors = num_neighbors
 
-        self.embedding = Embedding(100, muls[0])
-        self.embedding.weight.requires_grad = False
-        self.irreps_in = o3.Irreps([(muls[0], 0, 1)])
-
         self.radial = torch.nn.Sequential(
             GaussianBasis(rad_gaussians, cutoff),
             FC((rad_gaussians, ) + rad_hs, swish, variance_in=1 / rad_gaussians, out_act=True)
         )
-        self.irreps_sh = o3.Irreps([(1, l, (-1)**l) for l in range(lmax + 1)])  # spherical harmonics representation
+        self.irreps_sh = o3.Irreps.spherical_harmonics(lmax)  # spherical harmonics representation
 
-        irreps = self.irreps_in
+        irreps = self.irreps_sh
         modules = []
         for _ in range(num_layers):
             act = make_gated_block(irreps, muls, self.irreps_sh)
@@ -79,23 +75,28 @@ class Network(torch.nn.Module):
         assert pos.dim() == 2 and pos.shape[1] == 3
         batch = torch.zeros_like(z) if batch is None else batch
 
-        h = self.embedding(z)
-
         edge_index = radius_graph(pos, r=self.cutoff, batch=batch, max_num_neighbors=1000)
         row, col = edge_index
         edge_vec = pos[row] - pos[col]
-        edge_sh = o3.spherical_harmonics(self.irreps_sh, edge_vec, 'component') / self.num_neighbors**0.5
+        edge_sh = o3.spherical_harmonics(self.irreps_sh, edge_vec, 'component')
         edge_len = edge_vec.norm(dim=1)
         edge_weight = self.radial(edge_len)
         edge_c = (pi * edge_len / self.cutoff).cos().add(1).div(2)
+        edge_sh = edge_c[:, None] * edge_sh / self.num_neighbors**0.5
+
+        # z : [1, 6, 7, 8, 9] -> [0, 1, 2, 3, 4]
+        z = torch.tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[z]
+        edge_type = 5 * z[row] + z[col]
+
+        h = scatter(edge_sh, row, dim=0, dim_size=len(pos))
 
         for conv, act in self.layers[:-1]:
             with torch.autograd.profiler.record_function("Layer"):
-                h = conv(h, edge_index, edge_weight, edge_c, edge_sh)  # convolution
+                h = conv(h, z, edge_index, edge_weight, edge_sh, edge_type)  # convolution
                 h = act(h)  # gate non linearity
 
         with torch.autograd.profiler.record_function("Layer"):
-            h = self.layers[-1](h, edge_index, edge_weight, edge_c, edge_sh)
+            h = self.layers[-1](h, z, edge_index, edge_weight, edge_sh, edge_type)
 
         s = 0
         for i, (mul, (l, p)) in enumerate(self.irreps_out):
@@ -152,8 +153,11 @@ class Conv(MessagePassing):
         self.irreps_out = irreps_out.simplify()
         self.irreps_sh = irreps_sh.simplify()
 
-        self.si = Linear(self.irreps_in, self.irreps_out)
-        self.lin1 = Linear(self.irreps_in, self.irreps_in)
+        self.si = Linear(self.irreps_in, self.irreps_out, internal_weights=False, shared_weights=False)
+        self.si_weight = torch.nn.Parameter(torch.randn(25, self.si.tp.weight_numel))
+
+        self.lin1 = Linear(self.irreps_in, self.irreps_in, internal_weights=False, shared_weights=False)
+        self.lin1_weight = torch.nn.Parameter(torch.randn(25, self.lin1.tp.weight_numel))
 
         instr = []
         irreps = []
@@ -174,23 +178,24 @@ class Conv(MessagePassing):
         in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
         out = [(mul, ir, 1.0) for mul, ir in irreps]
         self.tp = WeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
-        self.ws = torch.nn.ModuleList([
-            FC((rad_features, prod(shape)), variance_out=1 / prod(shape))
+        self.ws = torch.nn.ParameterList([
+            torch.nn.Parameter(torch.randn(25, rad_features, prod(shape)))
             for shape in self.tp.weight_shapes
         ])
-        self.lin2 = Linear(irreps, self.irreps_out)
+        self.lin2 = Linear(irreps, self.irreps_out, internal_weights=False, shared_weights=False)
+        self.lin2_weight = torch.nn.Parameter(torch.randn(25, self.lin2.tp.weight_numel))
 
-    def forward(self, x, edge_index, edge_weight, edge_c, edge_sh, size=None):
+    def forward(self, x, z, edge_index, edge_weight, edge_sh, edge_type, size=None):
         with torch.autograd.profiler.record_function("Conv"):
             # x = [num_atoms, dim(irreps_in)]
-            s = self.si(x)
+            s = self.si(x, self.si_weight[z])
 
-            x = self.lin1(x)
-            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_c=edge_c, edge_weight=edge_weight)
-            x = self.lin2(x)
+            x = self.lin1(x, self.lin1_weight[z])
+            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_weight=edge_weight, edge_type=edge_type)
+            x = self.lin2(x, self.lin2_weight[z])
 
             return s + x
 
-    def message(self, x_j, sh, edge_c, edge_weight):
-        ws = [nn(edge_weight) * edge_c[:, None] for nn in self.ws]
+    def message(self, x_j, sh, edge_weight, edge_type):
+        ws = [torch.einsum('efw,ef->ew', w[edge_type], edge_weight) for w in self.ws]
         return self.tp(x_j, sh, ws)

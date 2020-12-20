@@ -80,6 +80,10 @@ class Irreps(tuple):
                 out.append((mul, ir))
         return tuple.__new__(self, out)
 
+    @staticmethod
+    def spherical_harmonics(lmax):
+        return Irreps([(1, l, (-1)**l) for l in range(lmax + 1)])
+
     def __getitem__(self, i):
         x = tuple.__getitem__(self, i)
         if isinstance(i, slice):

@@ -119,7 +119,14 @@ class Identity(torch.nn.Module):
 
 
 class Linear(torch.nn.Module):
-    def __init__(self, irreps_in, irreps_out, normalization: str = 'component'):
+    def __init__(
+            self,
+            irreps_in,
+            irreps_out,
+            normalization: str = 'component',
+            internal_weights: bool = True,
+            shared_weights: bool = True,
+        ):
         super().__init__()
 
         self.irreps_in = irreps_in.simplify()
@@ -133,7 +140,7 @@ class Linear(torch.nn.Module):
         ]
         in1 = [(mul, ir, 1.0) for mul, ir in self.irreps_in]
         out = [(mul, ir, 1.0) for mul, ir in self.irreps_out]
-        self.tp = WeightedTensorProduct(in1, [(1, (0, 1), 1.0)], out, instr, normalization, internal_weights=True)
+        self.tp = WeightedTensorProduct(in1, [(1, (0, 1), 1.0)], out, instr, normalization, internal_weights, shared_weights)
 
         output_mask = torch.cat([
             torch.ones(mul * (2 * l + 1))
@@ -146,13 +153,13 @@ class Linear(torch.nn.Module):
     def __repr__(self):
         return f"{self.__class__.__name__}({self.irreps_in} -> {self.irreps_out} {self.tp.weight_numel} weights)"
 
-    def forward(self, features):
+    def forward(self, features, weight=None):
         """
         :param features: [..., dim(irreps_in)]
         :return: [..., dim(irreps_out)]
         """
         ones = features.new_ones(features.shape[:-1] + (1,))
-        return self.tp(features, ones)
+        return self.tp(features, ones, weight)
 
 
 class WeightedTensorProduct(torch.nn.Module):

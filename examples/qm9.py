@@ -199,7 +199,7 @@ def main():
     args = parser.parse_args()
 
     wandb.login()
-    wandb.init(project="qm9", config=args.__dict__)
+    wandb.init(project=f"qm9 target{args.target}", config=args.__dict__)
     config = dict(wandb.config)
     print(config)
 
