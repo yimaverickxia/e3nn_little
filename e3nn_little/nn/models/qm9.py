@@ -178,7 +178,7 @@ class Conv(MessagePassing):
         in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
         out = [(mul, ir, 1.0) for mul, ir in irreps]
         self.tp = WeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
-        self.tp_weight = torch.nn.Parameter(torch.randn(25, rad_features, self.tp.weight_numel))
+        self.tp_weight = torch.nn.Parameter(torch.randn(rad_features, self.tp.weight_numel))
         self.lin2 = Linear(irreps, self.irreps_out, internal_weights=False, shared_weights=False)
         self.lin2_weight = torch.nn.Parameter(torch.randn(5, self.lin2.tp.weight_numel))
 
@@ -194,8 +194,5 @@ class Conv(MessagePassing):
             return s + x
 
     def message(self, x_j, sh, edge_weight, edge_type):
-        w = self.tp_weight.new_zeros(len(edge_weight), self.tp_weight.shape[2])
-        for i in range(25):
-            w[edge_type == i] = edge_weight[edge_type == i] @ self.tp_weight[i] / edge_weight.shape[1]
-        # w = torch.gather(torch.einsum('tfw,ef->tew', self.tp_weight, edge_weight), 0, edge_type.reshape(1, -1, 1).repeat(1, 1, self.tp_weight.shape[2]))
+        w = edge_weight @ (self.tp_weight / edge_weight.shape[1])
         return self.tp(x_j, sh, w)
