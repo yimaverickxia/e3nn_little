@@ -34,6 +34,7 @@ def execute(config):
         num_layers=config['num_layers'],
         rad_gaussians=config['rad_gaussians'],
         rad_hs=(config['rad_h'],) * config['rad_layers'],
+        num_filters=config['num_filters'],
         mean=config['mean'], std=config['std'],
         atomref=dataset.atomref(config['target']),
     )
@@ -186,8 +187,9 @@ def main():
     parser.add_argument("--lmax", type=int, default=1)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--rad_gaussians", type=int, default=50)
-    parser.add_argument("--rad_h", type=int, default=512)
+    parser.add_argument("--rad_h", type=int, default=128)
     parser.add_argument("--rad_layers", type=int, default=2)
+    parser.add_argument("--num_filters", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--bs", type=int, default=50)
     parser.add_argument("--target", type=int, default=7)

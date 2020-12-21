@@ -30,7 +30,7 @@ qm9_target_dict = {
 class Network(torch.nn.Module):
     def __init__(self, muls=(128, 12, 0), lmax=1,
                  num_layers=3, cutoff=10.0, rad_gaussians=50,
-                 rad_hs=(512, 512), num_neighbors=20,
+                 rad_hs=(128, 128), num_neighbors=20, num_filters=32,
                  readout='add', mean=None, std=None, scale=None,
                  atomref=None):
         super().__init__()
@@ -43,6 +43,7 @@ class Network(torch.nn.Module):
         self.scale = scale
         self.num_neighbors = num_neighbors
 
+        self.z_emb = torch.nn.Parameter(torch.randn(25, rad_hs[-1]))
         self.radial = torch.nn.Sequential(
             GaussianBasis(rad_gaussians, cutoff),
             FC((rad_gaussians, ) + rad_hs, swish, variance_in=1 / rad_gaussians, out_act=True)
@@ -53,7 +54,7 @@ class Network(torch.nn.Module):
         modules = []
         for _ in range(num_layers):
             act = make_gated_block(irreps, muls, self.irreps_sh)
-            conv = Conv(irreps, act.irreps_in, self.irreps_sh, rad_hs[-1])
+            conv = Conv(irreps, act.irreps_in, self.irreps_sh, 2 * rad_hs[-1], num_filters)
             irreps = act.irreps_out.simplify()
 
             modules += [torch.nn.ModuleList([conv, act])]
@@ -61,7 +62,7 @@ class Network(torch.nn.Module):
         self.layers = torch.nn.ModuleList(modules)
 
         self.irreps_out = o3.Irreps("0e + 0o")
-        self.layers.append(Conv(irreps, self.irreps_out, self.irreps_sh, rad_hs[-1]))
+        self.layers.append(Conv(irreps, self.irreps_out, self.irreps_sh, 2 * rad_hs[-1], num_filters))
 
         self.register_buffer('initial_atomref', atomref)
         self.atomref = None
@@ -75,28 +76,30 @@ class Network(torch.nn.Module):
         assert pos.dim() == 2 and pos.shape[1] == 3
         batch = torch.zeros_like(z) if batch is None else batch
 
-        edge_index = radius_graph(pos, r=self.cutoff, batch=batch, max_num_neighbors=1000)
-        row, col = edge_index
-        edge_vec = pos[row] - pos[col]
+        edge_src, edge_dst = radius_graph(pos, r=self.cutoff, batch=batch, max_num_neighbors=1000)
+        edge_vec = pos[edge_src] - pos[edge_dst]
         edge_sh = o3.spherical_harmonics(self.irreps_sh, edge_vec, 'component')
         edge_len = edge_vec.norm(dim=1)
-        edge_weight = self.radial(edge_len)
+        edge_len_emb = self.radial(edge_len)
         edge_c = (pi * edge_len / self.cutoff).cos().add(1).div(2)
         edge_sh = edge_c[:, None] * edge_sh / self.num_neighbors**0.5
 
         # z : [1, 6, 7, 8, 9] -> [0, 1, 2, 3, 4]
         z = z.new_tensor([-1, 0, -1, -1, -1, -1, 1, 2, 3, 4])[z]
-        edge_type = 5 * z[row] + z[col]
+        edge_z = 5 * z[edge_src] + z[edge_dst]
+        edge_z_emb = self.z_emb[edge_z]
 
-        h = scatter(edge_sh, row, dim=0, dim_size=len(pos))
+        edge_query = torch.cat([edge_z_emb, edge_len_emb], dim=1)
+
+        h = scatter(edge_sh, edge_src, dim=0, dim_size=len(pos))
 
         for conv, act in self.layers[:-1]:
             with torch.autograd.profiler.record_function("Layer"):
-                h = conv(h, z, edge_index, edge_weight, edge_sh, edge_type)  # convolution
+                h = conv(h, edge_src, edge_dst, edge_query, edge_sh)  # convolution
                 h = act(h)  # gate non linearity
 
         with torch.autograd.profiler.record_function("Layer"):
-            h = self.layers[-1](h, z, edge_index, edge_weight, edge_sh, edge_type)
+            h = self.layers[-1](h, edge_src, edge_dst, edge_query, edge_sh)
 
         s = 0
         for i, (mul, (l, p)) in enumerate(self.irreps_out):
@@ -146,18 +149,18 @@ def make_gated_block(irreps_in, muls, irreps_sh):
     return Gate(scalars, act_scalars, gates, act_gates, nonscalars)
 
 
-class Conv(MessagePassing):
-    def __init__(self, irreps_in, irreps_out, irreps_sh, rad_features):
-        super().__init__(aggr='add')
+class Conv(torch.nn.Module):
+    def __init__(self, irreps_in, irreps_out, irreps_sh, dim_key, num_filters):
+        super().__init__()
         self.irreps_in = irreps_in.simplify()
         self.irreps_out = irreps_out.simplify()
         self.irreps_sh = irreps_sh.simplify()
 
-        self.si = Linear(self.irreps_in, self.irreps_out, internal_weights=False, shared_weights=False)
-        self.si_weight = torch.nn.Parameter(torch.randn(5, self.si.tp.weight_numel))
+        self.si = Linear(self.irreps_in, self.irreps_out, internal_weights=True, shared_weights=True)
+        # self.si_weight = torch.nn.Parameter(torch.randn(5, self.si.tp.weight_numel))
 
-        self.lin1 = Linear(self.irreps_in, self.irreps_in, internal_weights=False, shared_weights=False)
-        self.lin1_weight = torch.nn.Parameter(torch.randn(5, self.lin1.tp.weight_numel))
+        self.lin1 = Linear(self.irreps_in, self.irreps_in, internal_weights=True, shared_weights=True)
+        # self.lin1_weight = torch.nn.Parameter(torch.randn(5, self.lin1.tp.weight_numel))
 
         instr = []
         irreps = []
@@ -178,21 +181,25 @@ class Conv(MessagePassing):
         in2 = [(mul, ir, 1.0) for mul, ir in self.irreps_sh]
         out = [(mul, ir, 1.0) for mul, ir in irreps]
         self.tp = WeightedTensorProduct(in1, in2, out, instr, internal_weights=False, shared_weights=False)
-        self.tp_weight = torch.nn.Parameter(torch.randn(rad_features, self.tp.weight_numel))
-        self.lin2 = Linear(irreps, self.irreps_out, internal_weights=False, shared_weights=False)
-        self.lin2_weight = torch.nn.Parameter(torch.randn(5, self.lin2.tp.weight_numel))
 
-    def forward(self, x, z, edge_index, edge_weight, edge_sh, edge_type, size=None):
+        self.tp_keys = torch.nn.Parameter(torch.randn(num_filters, dim_key))
+        self.tp_weight = torch.nn.Parameter(torch.randn(num_filters, self.tp.weight_numel))
+
+        self.lin2 = Linear(irreps, self.irreps_out, internal_weights=True, shared_weights=True)
+        # self.lin2_weight = torch.nn.Parameter(torch.randn(5, self.lin2.tp.weight_numel))
+
+    def forward(self, x, edge_src, edge_dst, edge_query, edge_sh):
         with torch.autograd.profiler.record_function("Conv"):
             # x = [num_atoms, dim(irreps_in)]
-            s = self.si(x, self.si_weight.index_select(0, z))
+            s = self.si(x)
 
-            x = self.lin1(x, self.lin1_weight.index_select(0, z))
-            x = self.propagate(edge_index, size=size, x=x, sh=edge_sh, edge_weight=edge_weight)
-            x = self.lin2(x, self.lin2_weight.index_select(0, z))
+            x = self.lin1(x)
 
+            weight = torch.softmax(edge_query @ self.tp_keys.T / self.tp_keys.shape[1]**0.5, dim=1) @ self.tp_weight / self.tp_weight.shape[0]**0.5
+
+            # edge_sh are divided by sqrt(num_neighbors)
+            edge_x = self.tp(x[edge_src], edge_sh, weight)
+            x = scatter(edge_x, edge_dst, dim=0, dim_size=len(x))
+
+            x = self.lin2(x)
             return s + x
-
-    def message(self, x_j, sh, edge_weight):
-        w = edge_weight @ (self.tp_weight / edge_weight.shape[1])
-        return self.tp(x_j, sh, w)
