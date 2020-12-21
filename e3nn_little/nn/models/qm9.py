@@ -33,14 +33,22 @@ def print_std(name, x):
 
 
 class Network(torch.nn.Module):
-    def __init__(self, muls=(128, 12, 0), lmax=1,
-                 num_layers=3, cutoff=10.0, rad_gaussians=50,
-                 rad_hs=(128, 128),
-                 num_filters=32,
-                 num_neighbors=20,
-                 num_atoms=20,
-                 mean=None, std=None, scale=None,
-                 atomref=None):
+    def __init__(
+            self,
+            muls=(256, 16, 0),
+            lmax=1,
+            num_layers=3,
+            cutoff=10.0,
+            rad_gaussians=50,
+            rad_hs=(128, 128),
+            num_filters=8,
+            num_neighbors=20,
+            num_atoms=20,
+            mean=None,
+            std=None,
+            scale=None,
+            atomref=None
+        ):
         super().__init__()
 
         self.cutoff = cutoff
