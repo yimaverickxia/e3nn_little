@@ -1,9 +1,9 @@
 # pylint: disable=not-callable, no-member, invalid-name, line-too-long, wildcard-import, unused-wildcard-import, missing-docstring, bare-except, abstract-method, arguments-differ
-from math import pi, prod
+from math import pi
 
 import torch
 from torch.nn import Embedding
-from torch_geometric.nn import MessagePassing, radius_graph
+from torch_geometric.nn import radius_graph
 from torch_scatter import scatter
 
 from e3nn_little import o3
@@ -27,21 +27,28 @@ qm9_target_dict = {
 }
 
 
+def print_std(name, x):
+    pass
+    # print(f"{name}{list(x.shape)}: {x.mean(0).abs().mean():.2f} +- {x.var(0).mean().sqrt():.1f}")
+
+
 class Network(torch.nn.Module):
     def __init__(self, muls=(128, 12, 0), lmax=1,
                  num_layers=3, cutoff=10.0, rad_gaussians=50,
-                 rad_hs=(128, 128), num_neighbors=20, num_filters=32,
-                 readout='add', mean=None, std=None, scale=None,
+                 rad_hs=(128, 128),
+                 num_filters=32,
+                 num_neighbors=20,
+                 num_atoms=20,
+                 mean=None, std=None, scale=None,
                  atomref=None):
         super().__init__()
 
-        assert readout in ['add', 'sum', 'mean']
-        self.readout = readout
         self.cutoff = cutoff
         self.mean = mean
         self.std = std
         self.scale = scale
         self.num_neighbors = num_neighbors
+        self.num_atoms = num_atoms
 
         self.z_emb = torch.nn.Parameter(torch.randn(25, rad_hs[-1]))
         self.radial = torch.nn.Sequential(
@@ -92,14 +99,22 @@ class Network(torch.nn.Module):
         edge_query = torch.cat([edge_z_emb, edge_len_emb], dim=1)
 
         h = scatter(edge_sh, edge_src, dim=0, dim_size=len(pos))
+        h[:, 0] = 1
+
+        print_std('h', h)
+        print_std('edge_query', edge_query)
 
         for conv, act in self.layers[:-1]:
             with torch.autograd.profiler.record_function("Layer"):
                 h = conv(h, edge_src, edge_dst, edge_query, edge_sh)  # convolution
+                print_std('post conv', h)
                 h = act(h)  # gate non linearity
+                print_std('post gate', h)
 
         with torch.autograd.profiler.record_function("Layer"):
             h = self.layers[-1](h, edge_src, edge_dst, edge_query, edge_sh)
+
+        print_std('h out', h)
 
         s = 0
         for i, (mul, (l, p)) in enumerate(self.irreps_out):
@@ -110,13 +125,18 @@ class Network(torch.nn.Module):
                 s += h[:, i].pow(2).mul(0.5)  # odd^2 = even
         h = s.view(-1, 1)
 
+        print_std('h out+', h)
+
+        # for the scatter we normalize
+        h = h / self.num_atoms**0.5
+
         if self.mean is not None and self.std is not None:
             h = h * self.std + self.mean
 
         if self.atomref is not None:
             h = h + self.atomref(z)
 
-        out = scatter(h, batch, dim=0, reduce=self.readout)
+        out = scatter(h, batch, dim=0)
 
         if self.scale is not None:
             out = self.scale * out
@@ -195,11 +215,14 @@ class Conv(torch.nn.Module):
 
             x = self.lin1(x)
 
-            weight = torch.softmax(edge_query @ self.tp_keys.T / self.tp_keys.shape[1]**0.5, dim=1) @ self.tp_weight / self.tp_weight.shape[0]**0.5
+            weight = torch.softmax(edge_query @ self.tp_keys.T / self.tp_keys.shape[1]**0.5, dim=1) @ self.tp_weight
 
             # edge_sh are divided by sqrt(num_neighbors)
             edge_x = self.tp(x[edge_src], edge_sh, weight)
             x = scatter(edge_x, edge_dst, dim=0, dim_size=len(x))
 
             x = self.lin2(x)
-            return s + x
+
+            print_std('self', s)
+            print_std('+x', x)
+            return s + x / 10
